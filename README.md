@@ -4,6 +4,8 @@
 
 <h1>PromX</h1>
 
+<sub>♪ 本机音乐终端 · 多曲库联机中 · 今晚也要好好听歌 ♪</sub>
+
 One native Android player for NetEase Cloud Music, QQ Music, Bilibili,
 Navidrome, Emby and local audio.<br>
 Unified search, playlists, synchronized lyrics, audio effects and listening together.
@@ -15,6 +17,13 @@ Unified search, playlists, synchronized lyrics, audio effects and listening toge
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-555555?style=flat-square" alt="GPL-3.0"></a>
 </p>
 
+<p>
+  <img src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin">
+  <img src="https://img.shields.io/badge/Jetpack_Compose-Native-4285F4?style=flat-square&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose">
+  <img src="https://img.shields.io/badge/Miuix-UI-111111?style=flat-square" alt="Miuix">
+  <img src="https://img.shields.io/badge/Media3-Audio-FF6B6B?style=flat-square" alt="AndroidX Media3">
+</p>
+
 <h4>Download</h4>
 
 <a href="https://github.com/TusanX/PromX/releases/latest"><img src="https://img.shields.io/badge/Download_PromX_APK-111111?style=for-the-badge&logo=android&logoColor=white" alt="Download PromX APK"></a>
@@ -24,8 +33,33 @@ Unified search, playlists, synchronized lyrics, audio effects and listening toge
 
 </div>
 
-> **Project lineage**<br>
-> PromX is an independently maintained fork of [CurrentMusicX](https://github.com/bileizhen/CurrentMusicX), the native Android client for [CurrentMusic](https://github.com/backrooms-yrc/CurrentMusic). Upstream copyright, third-party notices and license terms are preserved.
+<p align="center">✦ ━━━━━━━━━━━━━━━━━━━━━ ✦ ━━━━━━━━━━━━━━━━━━━━━ ✦</p>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <h3>🎧 3 sources</h3>
+      <sub>NetEase · QQ Music · Bilibili</sub>
+    </td>
+    <td align="center" width="33%">
+      <h3>📚 Libraries</h3>
+      <sub>Navidrome · Emby · Local</sub>
+    </td>
+    <td align="center" width="34%">
+      <h3>💿 One player</h3>
+      <sub>Search · Lyrics · Effects · Together</sub>
+    </td>
+  </tr>
+</table>
+
+<details open>
+<summary><b>💫 Project lineage / 作品从哪里来</b></summary>
+
+PromX is an independently maintained fork of [CurrentMusicX](https://github.com/bileizhen/CurrentMusicX), the native Android client for [CurrentMusic](https://github.com/backrooms-yrc/CurrentMusic). Upstream copyright, third-party notices and license terms are preserved.
+
+PromX 从 [CurrentMusicX](https://github.com/bileizhen/CurrentMusicX) 独立演化而来。CurrentMusicX 是 [CurrentMusic](https://github.com/backrooms-yrc/CurrentMusic) 的原生 Android 客户端。上游版权、第三方声明与许可证继续保留。
+
+</details>
 
 ## Features ✨
 
@@ -47,7 +81,7 @@ Unified search, playlists, synchronized lyrics, audio effects and listening toge
 - **Account and library connections.** Sign in to Prom, bind NetEase, QQ Music and Bilibili, or connect self-hosted libraries.
 - **Downloads and sharing.** Download songs or MVs, choose a destination, write tags and cover art, export lyrics and share tracks.
 
-## 功能说明
+## 功能说明 🎼
 
 PromX 是一个使用 Kotlin、Jetpack Compose 与 Miuix 构建的原生 Android 音乐客户端。目标是把国内主流音乐服务、自建曲库与本地音乐放进统一的搜索、播放、歌词和下载体验，同时保留各服务自己的账号与版权限制。
 
@@ -98,7 +132,7 @@ PromX 是一个使用 Kotlin、Jetpack Compose 与 Miuix 构建的原生 Android
 - 下载时可写入标题、艺人、专辑、封面和歌词。
 - 支持导出歌词、生成分享内容以及使用系统分享面板。
 
-## Screenshots
+## Screenshots 📸
 
 <p align="center">
   <img src=".github/img/promx-home.png" width="240" alt="PromX home">
@@ -107,9 +141,9 @@ PromX 是一个使用 Kotlin、Jetpack Compose 与 Miuix 构建的原生 Android
   <img src=".github/img/promx-settings.png" width="240" alt="PromX settings">
 </p>
 
-<p align="center"><sub>Current 1.5.2 build on Android 16. Screenshots follow the installed app.</sub></p>
+<p align="center"><sub>♪ Current 1.5.2 build on Android 16 · 界面截图与当前安装版本一致 ♪</sub></p>
 
-## Supported sources
+## Supported sources 🎚️
 
 | Source | Connection | Main use |
 | --- | --- | --- |
@@ -125,14 +159,14 @@ PromX 是一个使用 Kotlin、Jetpack Compose 与 Miuix 构建的原生 Android
 
 Service availability depends on the provider, account region, copyright and network conditions. PromX does not host music files.
 
-## Getting started
+## Getting started 🚀
 
 1. Download the latest APK from [Releases](https://github.com/TusanX/PromX/releases/latest).
 2. Open **设置 → 音源与网络** and choose a music source and lyric source.
 3. Connect NetEase, QQ Music, Bilibili, Navidrome or Emby when the selected feature requires an account.
 4. Return to **首页** and search or start from daily recommendations.
 
-## Compatibility
+## Compatibility 📱
 
 | Item | Requirement |
 | --- | --- |
@@ -144,7 +178,7 @@ Service availability depends on the provider, account region, copyright and netw
 | Live blur | Android 13 / API 33 or newer |
 | Toolchain | JDK 17, SDK 37, NDK 30.0.16248370, CMake 4.1.2 |
 
-## Privacy and data
+## Privacy and data 🔐
 
 - Account credentials, API keys and sessions are stored locally and encrypted where the provider supports it.
 - Library requests go directly to the service selected by the user. PromX does not proxy private server traffic.
@@ -152,7 +186,7 @@ Service availability depends on the provider, account region, copyright and netw
 - Crash and diagnostic logs remain local until the user explicitly exports and shares them.
 - Read [PRIVACY.md](PRIVACY.md) for the full data-handling description.
 
-## Build from source
+## Build from source 🛠️
 
 Create `local.properties` or set `ANDROID_HOME`:
 
@@ -186,7 +220,7 @@ keyPassword=...
 
 `keystore.properties`, `*.jks`, `local.properties`, `work/` and all build directories are excluded from Git.
 
-## FAQ
+## FAQ 💬
 
 <details>
 <summary>Why is a song or recommendation unavailable?</summary>
@@ -216,13 +250,48 @@ Only builds with the same signing certificate can upgrade each other. Test signa
 
 </details>
 
-## Contributing
+## Contributors ✨
+
+<p align="center">The player exists because the upstream authors shared their work and the community kept improving it.</p>
+
+<table>
+  <tr>
+    <td align="center" width="140">
+      <a href="https://github.com/TusanX"><img src="https://github.com/TusanX.png?size=120" width="76" alt="TusanX"><br><b>TusanX</b></a><br>
+      <sub>PromX maintainer</sub>
+    </td>
+    <td align="center" width="140">
+      <a href="https://github.com/bileizhen"><img src="https://github.com/bileizhen.png?size=120" width="76" alt="bileizhen"><br><b>bileizhen</b></a><br>
+      <sub>CurrentMusicX author<br>direct upstream</sub>
+    </td>
+    <td align="center" width="140">
+      <a href="https://github.com/backrooms-yrc"><img src="https://github.com/backrooms-yrc.png?size=120" width="76" alt="backrooms-yrc"><br><b>backrooms-yrc</b></a><br>
+      <sub>CurrentMusic project<br>original upstream</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary>🌟 All upstream contributors / 上游贡献者</summary>
+
+<p align="center">
+  <a href="https://github.com/bileizhen/CurrentMusicX/graphs/contributors">
+    <img src="https://img.shields.io/github/contributors/bileizhen/CurrentMusicX?style=for-the-badge&color=555555" alt="CurrentMusicX contributors">
+  </a>
+  <a href="https://github.com/backrooms-yrc/CurrentMusic/graphs/contributors">
+    <img src="https://img.shields.io/github/contributors/backrooms-yrc/CurrentMusic?style=for-the-badge&color=555555" alt="CurrentMusic contributors">
+  </a>
+</p>
+
+</details>
+
+## Contributing 🤝
 
 Issues and pull requests are welcome. Please include the app version, device, Android version, reproduction steps and expected result. Remove credentials, local paths, account identifiers and personal listening data from logs or screenshots before posting.
 
 欢迎提交 Issue 和 Pull Request。请说明改动解决的问题、实际验证结果与影响范围，并按独立功能或修复拆分提交。
 
-## Original project and license
+## Original project and license 📜
 
 - PromX: [TusanX/PromX](https://github.com/TusanX/PromX)
 - Direct upstream: [bileizhen/CurrentMusicX](https://github.com/bileizhen/CurrentMusicX)
@@ -235,5 +304,9 @@ The main project is distributed under GPL-3.0-only. Some included components are
 <div align="center">
 
 **PromX is an independent community project. Please support the services and music you use.**
+
+♪ ━━━━━━━━━━━━━━━━━━━━━ ✦ ━━━━━━━━━━━━━━━━━━━━━ ♪
+
+<a href="#promx">↑ Back to top · 回到顶部</a>
 
 </div>
