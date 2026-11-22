@@ -1,0 +1,84 @@
+package io.github.currencortex.music.feature.player
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.currencortex.music.core.media.PlaybackMode
+import io.github.currencortex.music.core.media.PlayerMode
+import io.github.currencortex.music.data.song.NeteaseSongActionsRepository
+
+@Composable internal fun PlayerSongActionsBar(vm: PlayerViewModel, onComments: () -> Unit, onQueue: () -> Unit,
+    onSleep: () -> Unit, onLike: (() -> Unit)?, onEffects: (() -> Unit)? = null, onOptions: (() -> Unit)? = null) {
+    val queue by vm.queue.collectAsStateWithLifecycle()
+    val actions by vm.actions.collectAsStateWithLifecycle()
+    val likePreview by vm.likePreview.collectAsStateWithLifecycle()
+    val statuses by vm.libraryStatuses.collectAsStateWithLifecycle()
+    val neteaseMain by vm.usesNeteaseLibrary.collectAsStateWithLifecycle()
+    val sleep by vm.sleepTimer.state.collectAsStateWithLifecycle()
+    val id = NeteaseSongActionsRepository.songId(queue.current)
+    // 备用音源（B站/QQ）没有网易云 id，但评论按钮仍应可用
+    val foreignSource = queue.current?.musicSource?.let {
+        it != io.github.currencortex.music.data.song.MusicSource.NETEASE &&
+            it != io.github.currencortex.music.data.song.MusicSource.LOCAL
+    } ?: false
+    val commentsAvailable = id != null || foreignSource
+    val navidrome = queue.current?.privateLibrary == true
+    // 备用音源（B站/QQ）没有网易云 id，用 Song.id 对齐，否则计数永远不显示
+    // 备用音源只有一个来源在播，计数直接取当前 actions（songId 在切歌瞬间可能还没对齐）
+    val current = if (navidrome || foreignSource) actions else actions.takeIf { it.songId == id }
+    PlayerFunctionBar(actionCount = 5, transportAligned = onOptions != null) {
+        // Match transport: fixed 48dp end buttons, three equally weighted middle slots.
+        val middleSlot = if (onOptions != null) Modifier.weight(1f) else Modifier
+        val liked = likePreview?.takeIf { it.song.id == queue.current?.id && it.song.musicSource == queue.current?.musicSource &&
+            it.song.privateIdentity == queue.current?.privateIdentity }?.liked
+            ?: if (neteaseMain || navidrome) current?.liked == true else statuses[queue.current?.id]?.liked == true
+        PlayerIconButton(PlayerIcon.LIKE, if (liked) "取消喜欢" else "喜欢", vm::togglePrimaryLike,
+            Modifier.testTag("player_like"), selected = liked, count = current?.likeCount,
+            showCount = true, enabled = queue.current?.video == false && queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL &&
+                (queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.EMBY || current?.liked != null), onLongClick = onLike)
+        Box(middleSlot, contentAlignment = Alignment.Center) {
+            PlayerIconButton(PlayerIcon.COMMENT, "评论区", onComments, Modifier.testTag("player_comments"),
+                count = current?.commentCount, showCount = true, enabled = commentsAvailable)
+        }
+        // Lit while a timer is running, so an armed timer is visible without opening the sheet.
+        Box(middleSlot, contentAlignment = Alignment.Center) {
+            PlayerIconButton(PlayerIcon.ALARM, "定时关闭${if (sleep.enabled) "，正在计时" else ""}", onSleep,
+                Modifier.testTag("player_sleep_timer"), selected = sleep.enabled)
+        }
+        if (onOptions != null) {
+            Box(middleSlot, contentAlignment = Alignment.Center) {
+                PlayerIconButton(PlayerIcon.EFFECTS, "音效", onEffects ?: {}, Modifier.testTag("player_effects"), enabled = onEffects != null)
+            }
+            PlayerIconButton(PlayerIcon.MORE, "播放与歌词设置", onOptions, Modifier.testTag("lyrics_options"))
+        } else {
+            PlayerPlaybackModeButton(vm)
+            PlayerQueueButton(vm, onQueue)
+        }
+    }
+}
+
+@Composable internal fun PlayerPlaybackModeButton(vm: PlayerViewModel) {
+    val queue by vm.queue.collectAsStateWithLifecycle()
+    val player by vm.state.collectAsStateWithLifecycle()
+    val together by vm.together.state.collectAsStateWithLifecycle()
+    val shared by vm.together.queue.collectAsStateWithLifecycle()
+    val mode = if (together.active) shared.mode else queue.mode
+    PlayerIconButton(when (mode) {
+        PlaybackMode.ONE -> PlayerIcon.REPEAT_ONE
+        PlaybackMode.SHUFFLE -> PlayerIcon.SHUFFLE
+        PlaybackMode.HEART -> PlayerIcon.HEART_MODE
+        PlaybackMode.LIST -> PlayerIcon.REPEAT
+    }, mode.label, vm::cyclePlaybackMode, Modifier.testTag("player_cycle_mode"),
+        selected = mode == PlaybackMode.HEART, enabled = if (together.active) !together.busy else player.mode == PlayerMode.LOCAL)
+}
+
+@Composable internal fun PlayerQueueButton(vm: PlayerViewModel, onQueue: () -> Unit) {
+    val queue by vm.queue.collectAsStateWithLifecycle()
+    val together by vm.together.state.collectAsStateWithLifecycle()
+    val shared by vm.together.queue.collectAsStateWithLifecycle()
+    PlayerIconButton(PlayerIcon.QUEUE, if (together.active) "一起听歌单，${shared.songs.size} 首" else "播放列表，${queue.songs.size} 首", onQueue, Modifier.testTag("open_player_queue"))
+}

@@ -1,0 +1,274 @@
+package io.github.currencortex.music.feature.binding
+
+import android.os.SystemClock
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import io.github.currencortex.music.AppContainer
+import io.github.currencortex.music.core.network.*
+import io.github.currencortex.music.data.binding.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+data class BindingUiState(val loading: Boolean = false, val binding: BindingState? = null, val error: String? = null,
+    val qrUrl: String? = null, val qrMessage: String = "", val codeUntil: Long = 0,
+    val codeFailed: Boolean = false, val phoneBoundRevision: Int = 0)
+data class BindingMembershipState(val ownerId: Long = 0, val loading: Boolean = false,
+    val value: NeteaseMembership? = null, val error: String? = null)
+data class BindingMedalsState(val ownerId: Long = 0, val loading: Boolean = false,
+    val value: NeteaseMedals? = null, val error: String? = null)
+class BindingViewModel(val container: AppContainer) : ViewModel() {
+    val state = MutableStateFlow(BindingUiState())
+    val busy = MutableStateFlow(false)
+    val message = MutableStateFlow<String?>(null)
+    val membership = MutableStateFlow(BindingMembershipState())
+    val medals = MutableStateFlow(BindingMedalsState())
+    private var medalsTask: Job? = null
+    private var medalsGeneration = 0L
+    private var medalsOwner: io.github.currencortex.music.core.netease.NeteaseAccountState? = null
+    private var membershipTask: Job? = null
+    private var membershipGeneration = 0L
+    private var membershipOwner: io.github.currencortex.music.core.netease.NeteaseAccountState? = null
+    private var task: Job? = null
+    private var actionTask: Job? = null
+    private var qrKey: String? = null
+    private var qrOwner: RequestSession? = null
+    private var qrGeneration = 0L
+    private var qrTerminal = false
+    private fun session() = RequestSession(container.accountRepository.server, container.accountRepository.token)
+
+    /** 原生网易云路由（不经过任何 Prom / CurrentMusic 服务） */
+    private suspend fun native(path: String, body: kotlinx.serialization.json.JsonObject =
+        kotlinx.serialization.json.buildJsonObject { },
+        query: Map<String, String> = emptyMap()): kotlinx.serialization.json.JsonObject {
+        val gw = container.nativeNetease ?: throw ApiException(ErrorKind.Server)
+        return gw.request("POST", path, query, body) as kotlinx.serialization.json.JsonObject
+    }
+    private fun kotlinx.serialization.json.JsonElement.text(k: String, d: String = ""): String =
+        (this as? kotlinx.serialization.json.JsonObject)?.get(k)
+            ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: d
+    private fun kotlinx.serialization.json.JsonElement.int(k: String, d: Int = -1): Int =
+        text(k).toIntOrNull() ?: d
+    val canLoginNetease get() = true   // 原生网易云登录不依赖任何 Prom 账号
+    private fun requireCurrentMusicAccount() { /* 已移除账号依赖 */ }
+    init {
+        viewModelScope.launch {
+            container.neteaseSessions.ready.await()
+            container.neteaseSessions.state.map { it.revision }.distinctUntilChanged().collect {
+                reloadMembership(); reloadMedals()
+            }
+        }
+        viewModelScope.launch {
+            container.sessionRestored.await()
+            combine(container.accountRepository.sessionRevision,
+                container.musicSettings.state.map { it.server }.distinctUntilChanged()) { revision, server -> revision to server }
+                .collect {
+                    actionTask?.cancel(); busy.value = false; message.value = null
+                    clearQr(); state.value = BindingUiState(); reload()
+                }
+        }
+    }
+    fun reload() {
+        reloadMembership()
+        reloadMedals()
+        task?.cancel(); task = viewModelScope.launch {
+            state.update { it.copy(loading = true, error = null) }
+            when (val r = appResult { container.bindingRepository.status() }) {
+                is AppResult.Success -> state.update { it.copy(loading = false, binding = r.value) }
+                is AppResult.Failure -> state.update { it.copy(loading = false, error = r.kind.message) }
+            }
+        }
+    }
+    fun reloadMembership() {
+        val owner = container.neteaseSessions.state.value
+        val uid = owner.profile?.uid ?: 0
+        if (container.nativeNetease != null && owner.loggedIn && !owner.stale &&
+            membershipOwner == owner && membership.value.loading) return
+        val token = ++membershipGeneration
+        membershipTask?.cancel()
+        membershipOwner = owner
+        membership.value = BindingMembershipState()
+        if (container.nativeNetease == null || !owner.loggedIn || owner.stale || uid <= 0) return
+        membership.value = BindingMembershipState(uid, loading = true)
+        membershipTask = viewModelScope.launch {
+            val result = appResult { container.bindingRepository.membership() }
+            if (token != membershipGeneration || container.neteaseSessions.state.value != owner) return@launch
+            membership.value = when (result) {
+                is AppResult.Success -> if (result.value.userId == uid) BindingMembershipState(uid, value = result.value)
+                    else BindingMembershipState(uid, error = "会员信息暂不可用")
+                is AppResult.Failure -> BindingMembershipState(uid, error = "会员信息暂不可用")
+            }
+        }
+    }
+    fun reloadMedals() {
+        val owner = container.neteaseSessions.state.value
+        val uid = owner.profile?.uid ?: 0
+        if (container.nativeNetease != null && owner.loggedIn && !owner.stale &&
+            medalsOwner == owner && medals.value.loading) return
+        val generation = ++medalsGeneration
+        medalsTask?.cancel()
+        medalsOwner = owner
+        medals.value = BindingMedalsState()
+        if (container.nativeNetease == null || !owner.loggedIn || owner.stale || uid <= 0) return
+        medals.value = BindingMedalsState(uid, loading = true)
+        medalsTask = viewModelScope.launch {
+            val result = appResult { container.bindingRepository.medals() }
+            if (generation != medalsGeneration || container.neteaseSessions.state.value != owner) return@launch
+            medals.value = when (result) {
+                is AppResult.Success -> if (result.value.userId == uid) BindingMedalsState(uid, value = result.value)
+                    else BindingMedalsState(uid, error = "勋章暂时无法加载")
+                is AppResult.Failure -> BindingMedalsState(uid, error = "勋章暂时无法加载")
+            }
+        }
+    }
+    private fun failureMessage(failure: AppResult.Failure, stage: String): String {
+        val status = if (failure.status > 0) "（HTTP ${failure.status}）" else ""
+        if (stage == "备用验证码发送" && failure.kind in listOf(ErrorKind.Forbidden, ErrorKind.NotFound))
+            return "当前服务器未开放备用验证码接口，请使用扫码登录。"
+        if (stage.endsWith("验证码发送") && failure.kind in listOf(ErrorKind.Server, ErrorKind.Timeout, ErrorKind.Network))
+            return "网易云验证码发送结果未确认$status。若已收到短信，可直接填写；未收到可稍后重试或改用扫码登录。"
+        if (failure.kind == ErrorKind.Server) return "网易云${stage}暂时失败$status，请稍后重试" +
+            (if (stage == "手机验证码登录") "，或改用扫码登录。" else "。")
+        return "网易云$stage$status：${failure.kind.message}"
+    }
+    private fun action(stage: String = "账号操作", block: suspend (RequestSession) -> String) {
+        if (busy.value) return
+        busy.value = true
+        message.value = null
+        val expected = session()
+        actionTask = viewModelScope.launch {
+            try { when (val r = appResult { block(expected) }) {
+                is AppResult.Success -> if (expected == session()) { message.value = r.value; reload() }
+                is AppResult.Failure -> if (expected == session()) { message.value = failureMessage(r, stage); reload() }
+            } } finally { if (expected == session()) busy.value = false }
+        }
+    }
+    fun live() = action {
+        val status = container.bindingRepository.live()
+        if (status.ok) "网易云登录态正常" else if (!status.bound) "尚未绑定网易云" else "网易云登录态已失效，请重新登录"
+    }
+    fun refresh() = action { expected -> container.bindingRepository.refresh(expected); "网易云登录态已刷新" }
+    fun syncProjectBinding() { viewModelScope.launch { container.bindingRepository.syncProjectBinding() } }
+    fun sync(expected: RequestSession = session()) = action { container.bindingRepository.sync(expected).message() }
+    fun mainLibrary(value: Boolean) = viewModelScope.launch { container.musicSettings.setNeteaseMainLibrary(value) }
+    fun reloadMusic() = action {
+        container.bindingRepository.status()
+        container.neteaseLibrary.invalidate()
+        container.libraryRepository.invalidate()
+        "音乐库已更新"
+    }
+    private suspend fun afterBinding(expected: RequestSession): String {
+        container.importNeteaseAvatarAfterLogin(expected)
+        if (container.musicSettings.snapshot().neteaseMainLibrary || container.apiClient.hasLocalNeteaseLogin) {
+            val status = appResult { container.bindingRepository.status() }
+            container.neteaseLibrary.invalidate()
+            container.libraryRepository.invalidate()
+            return if (status is AppResult.Success) {
+                if (container.apiClient.hasLocalNeteaseLogin) "绑定成功，网易云直连已就绪" else "绑定成功，已使用网易云音乐库"
+            }
+                else "绑定成功；暂时无法读取音乐库，请刷新重试"
+        }
+        return when (val result = appResult { container.bindingRepository.sync(expected) }) {
+            is AppResult.Success -> "绑定成功；${result.value.message()}"
+            is AppResult.Failure -> "绑定成功；${failureMessage(result, "歌单同步")}，可再次同步"
+        }
+    }
+    fun unbind() = action { expected ->
+        val local = container.apiClient.hasLocalNeteaseLogin
+        container.bindingRepository.unbind(expected); clearQr()
+        if (local) "本机网易云账号已退出，云端绑定保留" else "网易云已解绑，已导入歌单保留为快照" }
+    fun code(phone: String, country: String, alternate: Boolean = false) {
+        if (SystemClock.elapsedRealtime() < state.value.codeUntil) return
+        action(if (alternate) "备用验证码发送" else "验证码发送") { expected ->
+            requireCurrentMusicAccount()
+            // A gateway timeout does not prove that the SMS was not delivered.
+            state.update { it.copy(codeUntil = SystemClock.elapsedRealtime() + 60_000, codeFailed = false) }
+            when (val result = appResult { native("ncmbind/phone/code", kotlinx.serialization.json.buildJsonObject {
+                put("phone", kotlinx.serialization.json.JsonPrimitive(phone))
+                put("ctcode", kotlinx.serialization.json.JsonPrimitive(country))
+            }) }) {
+                is AppResult.Success -> "验证码已发送，请查看短信"
+                is AppResult.Failure -> {
+                    if (expected == session()) state.update { it.copy(codeFailed = true) }
+                    throw ApiException(result.kind, result.status)
+                }
+            }
+        }
+    }
+    fun phone(phone: String, captcha: String, country: String) = action("手机验证码登录") { expected ->
+        // 原生网关：直接由设备向网易云登录，不经过 Prom 服务
+        native("ncmbind/phone/login", kotlinx.serialization.json.buildJsonObject {
+            put("phone", kotlinx.serialization.json.JsonPrimitive(phone))
+            put("captcha", kotlinx.serialization.json.JsonPrimitive(captcha))
+            put("ctcode", kotlinx.serialization.json.JsonPrimitive(country))
+        })
+        qrTerminal = true
+        action("音乐库更新") { afterBinding(expected) }
+        "网易云登录成功"
+    }
+    suspend fun qrSession() {
+        if (!canLoginNetease) { clearQr(); return }
+        val expected = session()
+        if (qrOwner != expected) clearQr()
+        qrOwner = expected
+        if (qrTerminal) return
+        val generation = qrGeneration
+        fun valid() = expected == session() && generation == qrGeneration
+        if (qrKey == null) {
+            state.update { it.copy(qrUrl = null, qrMessage = "正在生成二维码…") }
+            when (val key = appResult { native("ncmbind/qr/key").text("key") }) {
+                is AppResult.Failure -> {
+                    if (valid()) state.update { it.copy(qrMessage = failureMessage(key, "二维码生成")) }
+                    return
+                }
+                is AppResult.Success -> {
+                    if (!valid()) return
+                    qrKey = key.value
+                    state.update { it.copy(qrUrl = "https://music.163.com/login?codekey=" + key.value, qrMessage = "等待扫码…") }
+                }
+            }
+        }
+        val key = qrKey ?: return
+        var retryDelay = 2000L
+        // Resume checks the existing key immediately, including confirmation made in the NCM app.
+        while (currentCoroutineContext().isActive && valid()) {
+            when (val status = appResult { native("ncmbind/qr/check", query = mapOf("key" to key)) }) {
+                is AppResult.Failure -> {
+                    if (!valid()) return
+                    if (status.kind in listOf(ErrorKind.Unauthorized, ErrorKind.Forbidden, ErrorKind.NotFound)) {
+                        qrTerminal = true
+                        state.update { it.copy(qrUrl = null, qrMessage = failureMessage(status, "扫码状态查询")) }
+                        return
+                    }
+                    state.update { it.copy(qrMessage = failureMessage(status, "扫码状态查询") + " 正在重试，二维码保持不变。") }
+                    retryDelay = (retryDelay * 2).coerceAtMost(15000L)
+                }
+                is AppResult.Success -> {
+                    if (!valid()) return
+                    retryDelay = 2000L
+                    when (status.value.int("code")) {
+                        800 -> {
+                            qrTerminal = true
+                            state.update { it.copy(qrMessage = "二维码已过期，请刷新", qrUrl = null) }
+                            return
+                        }
+                        802 -> state.update { it.copy(qrMessage = "已扫码，请在网易云音乐确认授权…") }
+                        803 -> {
+                            qrTerminal = true
+                            state.update { it.copy(qrUrl = null, qrMessage = "绑定成功") }
+                            action("音乐库更新") { afterBinding(expected) }
+                            return
+                        }
+                        801 -> state.update { it.copy(qrMessage = "等待扫码…") }
+                        else -> state.update { it.copy(qrMessage = "扫码状态暂时不可用，正在重试，二维码保持不变。") }
+                    }
+                }
+            }
+            delay(retryDelay)
+        }
+    }
+    fun clearQr() {
+        qrGeneration++; qrKey = null; qrOwner = null; qrTerminal = false
+        state.update { it.copy(qrUrl = null, qrMessage = "") }
+    }
+    override fun onCleared() { task?.cancel() }
+}

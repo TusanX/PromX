@@ -1,0 +1,108 @@
+name: Android CI
+run-name: Build CI release · main
+on:
+  workflow_dispatch:
+    inputs:
+      batch_wakeup:
+        description: Apply the automatic release batch policy
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      required: ${{ steps.scope.outputs.required }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Determine Android build scope
+        id: scope
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {releaseDecision} = require('./.github/scripts/ci-batch.cjs');
+            const verifyOnly = context.payload.inputs?.batch_wakeup !== 'true';
+            const decision = await releaseDecision({github, context, sha: context.sha, verifyOnly});
+            if (typeof decision.required !== 'boolean') throw new Error('Invalid Android build decision');
+            core.info(decision.reason);
+            await core.summary.addRaw(decision.reason).write();
+            core.setOutput('required', decision.required);
+
+  build:
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: android-build-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '12266719'
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-37.0" "build-tools;35.0.0" "ndk;30.0.16248370" "cmake;4.1.2"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Bundle installed CI release notes
+        env:
+          CI_BUILD_NUMBER: ${{ github.run_number }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await require('./.github/scripts/bundled-release-notes.cjs').bundle({github, context});
+      - name: Build and verify unsigned CI release
+        env:
+          CI_BUILD_NUMBER: ${{ github.run_number }}
+        run: ./gradlew :app:assembleRelease :app:lintRelease -PciBuildNumber="$CI_BUILD_NUMBER" -PinstalledReleaseNotesDir="$GITHUB_WORKSPACE/app/build/generated/installedReleaseNotes" -Plei.officialRepositoriesFirst=true --build-cache --no-daemon --stacktrace
+      - name: Prepare CI artifact
+        env:
+          CI_BUILD_NUMBER: ${{ github.run_number }}
+        run: node .github/scripts/ci-release.cjs prepare
+      - name: Upload unsigned CI APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-unsigned
+          path: ci-dist/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-*
+
+  request-publication:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      # GITHUB_TOKEN dispatches do not reliably propagate workflow_run events.
+      # This job has no checkout or signing secrets; the publisher revalidates it.
+      - name: Request CI publication
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo, workflow_id: 'ci-distribution.yml', ref: 'main',
+              inputs: {run_id: String(context.runId), run_attempt: process.env.GITHUB_RUN_ATTEMPT},
+            });

@@ -1,0 +1,211 @@
+package io.github.currencortex.music.feature.search
+
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.*
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import io.github.currencortex.music.core.media.PlayerController
+import io.github.currencortex.music.data.song.Song
+import io.github.currencortex.music.ui.component.*
+import io.github.currencortex.music.ui.component.nativeui.*
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+@Composable internal fun SearchScreen(vm: SearchViewModel, player: PlayerController,
+    actions: (@Composable (Song) -> Unit)? = null, roomName: String? = null, onBack: (() -> Unit)? = null,
+    navigate: (String) -> Unit = {}, sheet: SearchSheetState? = null, autoFocus: Boolean = false, onFocused: () -> Unit = {},
+    recommendations: List<Song> = emptyList(), recent: List<Song> = emptyList(),
+    quickActions: (@Composable (Song, Boolean) -> Unit)? = null, onResults: (List<Song>) -> Unit = {},
+    onPlayAll: ((List<Song>) -> Unit)? = null,
+    onPlay: (Song) -> Unit) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    val suggestions by vm.suggestions.collectAsStateWithLifecycle()
+    val history by vm.history.collectAsStateWithLifecycle()
+    val landing by vm.landing.collectAsStateWithLifecycle()
+    val charts by vm.charts.collectAsStateWithLifecycle()
+    val primarySource by vm.primarySource.collectAsStateWithLifecycle()
+    val playing by remember(player) { player.state.map { it.song?.id to it.playing }.distinctUntilChanged() }
+        .collectAsStateWithLifecycle(initialValue = null to false)
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val requester = remember { FocusRequester() }
+    val bottomInset = LocalMusicBottomInset.current
+    val categories = when {
+        roomName != null -> listOf(SearchCategory.SONG, SearchCategory.LYRIC)
+        primarySource == io.github.currencortex.music.data.song.MusicSource.NETEASE -> SearchCategory.entries
+        else -> listOf(SearchCategory.SONG)
+    }
+    val showCategoryStrip = roomName != null || categories.size > 1
+    val category = state.category.takeIf { it in categories } ?: SearchCategory.SONG
+    val page = state.pages[category] ?: SearchCategoryPage()
+    val categoryName = if (category == SearchCategory.SONG && primarySource != io.github.currencortex.music.data.song.MusicSource.NETEASE) "内容" else category.label
+    val lyricScroll = rememberLazyListState()
+    val songScroll = rememberLazyListState()
+    val artistScroll = rememberLazyListState()
+    val albumScroll = rememberLazyListState()
+    val playlistScroll = rememberLazyListState()
+    val scroll = when (category) {
+        SearchCategory.LYRIC -> lyricScroll
+        SearchCategory.SONG -> songScroll
+        SearchCategory.ARTIST -> artistScroll
+        SearchCategory.ALBUM -> albumScroll
+        SearchCategory.PLAYLIST -> playlistScroll
+    }
+    var inputFocused by remember { mutableStateOf(false) }
+    var target by remember { mutableStateOf<Rect?>(null) }
+    LaunchedEffect(roomName != null, primarySource) {
+        if (roomName != null && state.category !in categories) vm.select(SearchCategory.SONG)
+        else if (roomName == null && primarySource == io.github.currencortex.music.data.song.MusicSource.NETEASE) vm.loadLanding()
+    }
+    LaunchedEffect(autoFocus) {
+        if (autoFocus) { withFrameNanos { }; requester.requestFocus(); keyboard?.show(); onFocused() }
+    }
+    LaunchedEffect(state.submitted) { lyricScroll.scrollToItem(0); songScroll.scrollToItem(0); artistScroll.scrollToItem(0); albumScroll.scrollToItem(0); playlistScroll.scrollToItem(0) }
+    val categoryTabs = remember(categories) { categories.map { it.route to it.label } }
+    val categoryStrip: @Composable () -> Unit = {
+        MusicCategoryTabs(categoryTabs, category.route,
+            { key -> focus.clearFocus(); keyboard?.hide(); vm.select(SearchCategory.entries.first { it.route == key }) },
+            "search_category", Modifier.padding(vertical = 4.dp))
+    }
+    // Visible song and lyric rows request their own covers at the same size.
+    if (category != SearchCategory.SONG && category != SearchCategory.LYRIC)
+        PreloadMusicCovers(remember(page.entries) { page.entries.take(8).map { it.cover }.distinct() })
+    LaunchedEffect(page.songs) { if (page.songs.isNotEmpty()) onResults(page.songs) }
+    fun submit(keyword: String = state.query) { focus.clearFocus(); keyboard?.hide(); vm.search(keyword) }
+    fun back() { focus.clearFocus(); keyboard?.hide(); onBack?.invoke() }
+    val colors = MiuixTheme.colorScheme
+    val showSuggestions = inputFocused && state.query.isNotBlank() && state.query.trim() != state.submitted && suggestions.query == state.query.trim()
+    var headerHeight by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val status = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val toolbarHeight = with(density) { if (headerHeight > 0) headerHeight.toDp() - status else 72.dp }
+    SettingsUiScope {
+    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.widthIn(max = 840.dp).fillMaxSize().align(Alignment.TopCenter)) {
+        val height = with(density) { maxHeight.toPx() }
+        SettingsScrollLayout(Modifier.fillMaxSize().then(if (sheet != null) Modifier.imePadding() else Modifier),
+            toolbarHeight = toolbarHeight, topBar = {
+            Column(Modifier.fillMaxWidth().onSizeChanged { headerHeight = it.height }.statusBarsPadding().testTag("search_toolbar")) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (onBack != null && sheet == null) {
+                    GlassIconButton(::back, "返回", Modifier.testTag(if (roomName != null) "room_search_back" else "search_back")) {
+                        Icon(MusicIcons.Back, null)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                }
+                Box(Modifier.weight(1f).height(48.dp).onGloballyPositioned { target = it.boundsInRoot() }) {
+                    MusicSearchBar(state.query, { if (state.query.isBlank()) { requester.requestFocus(); keyboard?.show() } else submit() },
+                        Modifier.fillMaxSize().graphicsLayer {
+                            val source = sheet?.source; val end = target; val p = sheet?.progress ?: 1f
+                            if (source != null && end != null && end.width > 0 && end.height > 0) {
+                                translationX = (source.left - end.left) * (1f - p)
+                                translationY = (source.top - end.top) * (1f - p)
+                            }
+                        }.testTag("search_header_field"), placeholder = promSourceSearchHint(primarySource),
+                        onInput = vm::input, requester = requester,
+                        onInputFocus = { inputFocused = it }, onCancel = ::back)
+                }
+            }
+
+            }
+        }) { topInset ->
+            Box(Modifier.fillMaxSize()) {
+            if (!showSuggestions) LazyColumn(Modifier.fillMaxSize().testTag("search_screen").graphicsLayer {
+                val p = sheet?.progress ?: 1f
+                translationY = height * (1f - p); alpha = (p / .65f).coerceIn(0f, 1f)
+            }, state = scroll, contentPadding = PaddingValues(start = 16.dp, top = topInset + 8.dp, end = 16.dp, bottom = 32.dp + bottomInset),
+                verticalArrangement = Arrangement.spacedBy(if (state.searched) 2.dp else 16.dp)) {
+                if (showCategoryStrip) item(key = "search_categories") { categoryStrip() }
+                if (roomName != null) item { Text("$roomName · 点击歌曲提交点歌", fontSize = 13.sp) }
+                if (!state.searched) item {
+                    SearchLandingContent(history, landing, charts, recommendations, recent, primarySource,
+                        onSearch = ::submit, onClearHistory = { vm.clearHistory() }, onDeleteHistory = { vm.deleteHistory(it) },
+                        onRetryHot = { vm.loadLanding(true) }, onRetryCharts = { vm.loadCharts(true) },
+                        onLoadChart = { id, retry -> vm.loadChart(id, retry) },
+                        roomSearch = roomName != null)
+                }
+        page.error?.let { error -> item {
+            Text(error)
+            MusicTextAction("重试", vm::retry, Modifier.testTag("search_retry"), enabled = !page.loading)
+        } }
+        if (page.loading && page.count == 0) item { LoadingSongList(4, searchActions = quickActions != null) }
+        if (state.searched && page.loaded) item {
+            val count = when (category) {
+                SearchCategory.SONG -> if (primarySource == io.github.currencortex.music.data.song.MusicSource.BILIBILI)
+                    "${page.total} 条视频" else if (primarySource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+                    "${page.total} 首" else "${page.total} 首歌曲"
+                SearchCategory.LYRIC -> "${page.total} 首歌词匹配歌曲"
+                SearchCategory.ARTIST -> "${page.total} 位作者"
+                SearchCategory.ALBUM -> "${page.total} 张专辑"
+                SearchCategory.PLAYLIST -> "${page.total} 个歌单"
+            }
+            if (roomName == null && page.songs.isNotEmpty() && onPlayAll != null)
+                SearchResultsToolbar(page.songs.size, page.total, { onPlayAll(page.songs) }, { page.songs.forEach { player.add(it) } },
+                    unit = if (primarySource == io.github.currencortex.music.data.song.MusicSource.BILIBILI) "条" else "首")
+            else Text("找到 $count", Modifier.padding(vertical = 12.dp), fontSize = 13.sp, color = colors.onSurface.copy(alpha = .45f))
+        }
+        if (state.searched && page.loaded && !page.loading && page.error == null && page.count == 0) item {
+            Text("没有找到$categoryName，试试其他关键词", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f))
+        }
+        itemsIndexed(page.entries, key = { _, entry -> "${category.route}-${entry.id}" }, contentType = { _, _ -> "catalog" }) { _, entry ->
+            Row(Modifier.fillMaxWidth().clickable(enabled = entry.id > 0, role = Role.Button) {
+                navigate("lib/${if (category == SearchCategory.PLAYLIST) "ncmplaylist" else category.route}/${entry.id}")
+            }.padding(vertical = 8.dp).testTag("search_${category.route}_${entry.id}"), verticalAlignment = Alignment.CenterVertically) {
+                MusicCover(entry.cover, Modifier.size(52.dp), 160, cornerRadius = if (category == SearchCategory.ARTIST) 26.dp else 14.dp)
+                Column(Modifier.weight(1f).padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(searchMatchText(entry.name, state.submitted, colors.primary), fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(entry.subtitle.ifBlank { when (category) {
+                        SearchCategory.ARTIST -> "艺人"
+                        SearchCategory.PLAYLIST -> "网易云歌单"
+                        else -> "专辑"
+                    } }, fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text("›", fontSize = 22.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .35f))
+            }
+        }
+        itemsIndexed(page.songs, key = { _, song -> song.id }, contentType = { _, _ -> category }) { _, song ->
+            Column(Modifier.testTag("search_song_${song.id}")) {
+                SearchResultSongRow(song, state.submitted, playing.first == song.id && playing.second,
+                    { onPlay(song) }, { player.add(song, true) }, { player.add(song) },
+                    lyric = page.matchedLyrics[song.id].takeIf { category == SearchCategory.LYRIC },
+                    quickActions = quickActions?.let { render -> { render(song, category != SearchCategory.LYRIC) } },
+                    extraActions = { actions?.invoke(song) },
+                    compactActions = category == SearchCategory.LYRIC, retryLyric = { vm.retryLyricContext(song.id) })
+            }
+        }
+        if (page.loading && page.count > 0) item { LoadingSongList(2, searchActions = quickActions != null) }
+        if (page.more && page.error == null) item {
+            MusicTextAction("加载更多", { vm.search(more = true) }, Modifier.fillMaxWidth().testTag("search_load_more"), enabled = !page.loading)
+        }
+            }
+                if (showSuggestions) SearchSuggestionsContent(state.query.trim(), suggestions, ::submit,
+                    Modifier.fillMaxSize().padding(top = topInset).background(colors.background).graphicsLayer {
+                        val p = sheet?.progress ?: 1f
+                        translationY = height * (1f - p); alpha = (p / .65f).coerceIn(0f, 1f)
+                    }, header = if (showCategoryStrip) categoryStrip else ({ }))
+
+            }
+        }
+    }
+    }
+    }
+}

@@ -1,0 +1,442 @@
+package io.github.currencortex.music.feature.library
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import io.github.currencortex.music.AppContainer
+import io.github.currencortex.music.core.network.*
+import io.github.currencortex.music.data.library.*
+import io.github.currencortex.music.data.song.Song
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.time.LocalDate
+
+data class LibraryHomeState(val loading: Boolean = false, val daily: List<Song> = emptyList(), val forYou: List<Song> = emptyList(),
+    val recent: List<Song> = emptyList(), val playlists: List<Playlist> = emptyList(), val errors: Map<String, String> = emptyMap(),
+    val loaded: Boolean = false, val pendingSections: Set<String> = emptySet(),
+    val recommendedPlaylists: List<Playlist> = emptyList())
+
+class LibraryViewModel(val container: AppContainer) : ViewModel() {
+    val home = MutableStateFlow(LibraryHomeState())
+    val message = MutableStateFlow<String?>(null)
+    val busy = MutableStateFlow(false)
+    val selectedSong = MutableStateFlow<Song?>(null)
+    val availablePlaylists = MutableStateFlow<List<Playlist>>(emptyList())
+    val playlistError = MutableStateFlow<String?>(null)
+    val primaryLikeBusy = MutableStateFlow(false)
+    val statuses = container.libraryRepository.statuses
+    val likes = io.github.currencortex.music.data.song.SongLikeController(container.libraryRepository,
+        container.neteaseSongActions, viewModelScope) { container.musicSession() }
+    private val refreshRequest = MutableStateFlow(0)
+    private var prefetchJob: Job? = null
+    private var playlistLoad: Job? = null
+    private var homeDay = LocalDate.now()
+    init {
+        viewModelScope.launch {
+            container.sessionRestored.await()
+            launch { container.accountRepository.sessionRevision.drop(1).collect {
+                likes.dismiss(); playlistLoad?.cancel(); selectedSong.value = null
+                availablePlaylists.value = emptyList(); playlistError.value = null
+            } }
+            var identity: List<Any?>? = null
+            combine(container.accountRepository.state.map { it.account?.id }.distinctUntilChanged(),
+                container.musicSettings.state.map { it.server }.distinctUntilChanged(), container.libraryRepository.revision,
+                refreshRequest, container.primaryLibrary.identity) { id, server, revision, refresh, primary -> listOf(id, server, revision, refresh, primary) }
+                .combine(container.neteaseLibrary.revision) { keys, revision -> keys + revision }
+                .combine(container.neteaseSessions.state.map { it.profile?.uid }.distinctUntilChanged()) { keys, uid -> keys + uid }
+                .collectLatest { keys ->
+                    prefetchJob?.cancel()
+                    // Clear personalized cards when either the project or bound NetEase account changes.
+                    val nextIdentity = keys.take(2) + listOf(keys[4], keys.last())
+                    val sameAccount = identity == nextIdentity
+                    if (!sameAccount) likes.dismiss()
+                    identity = nextIdentity
+                    val pending = setOf("每日推荐", "每日推荐歌单", "最近播放", "我的歌单")
+                    home.value = if (sameAccount) home.value.copy(loading = true, errors = emptyMap(), pendingSections = pending)
+                        else LibraryHomeState(loading = true, pendingSections = pending)
+                    loadHome()
+                    if (container.musicSettings.state.value.primarySource !=
+                        io.github.currencortex.music.data.song.MusicSource.NETEASE ||
+                        container.accountRepository.token != null || container.nativeNetease != null) prefetchJob = viewModelScope.launch {
+                        launch { appResult {
+                            (if (container.musicSettings.state.value.primarySource ==
+                                io.github.currencortex.music.data.song.MusicSource.NETEASE)
+                                container.primaryLibrary.likedPlaylist() else null)
+                                ?: container.libraryRepository.likedSongs()
+                        } }
+                        home.value.playlists.firstOrNull()?.let { playlist -> launch { appResult {
+                            if (playlist.source == "netease") container.neteaseLibrary.playlist(playlist.id)
+                            else container.libraryRepository.playlist(playlist.id)
+                        } } }
+                    }
+                }
+        }
+    }
+    fun refresh() {
+        if (home.value.loading) return
+        home.update { it.copy(loading = true, errors = emptyMap(), pendingSections = setOf("每日推荐", "每日推荐歌单", "最近播放", "我的歌单")) }
+        container.libraryRepository.clearReads(); container.neteaseLibrary.invalidate(); refreshRequest.update { it + 1 }
+    }
+    fun refreshForNewDay() { if (homeDay != LocalDate.now()) refresh() }
+    private suspend fun loadHome() = coroutineScope {
+        homeDay = LocalDate.now()
+        val source = container.musicSettings.state.value.primarySource
+        if (source == io.github.currencortex.music.data.song.MusicSource.NETEASE &&
+            container.accountRepository.token == null && container.nativeNetease == null) {
+            home.value = LibraryHomeState(loaded = true)
+            return@coroutineScope
+        }
+        suspend fun <T> section(name: String, request: suspend () -> T, update: (LibraryHomeState, T) -> LibraryHomeState) {
+            when (val r = appResult { request() }) {
+                is AppResult.Success -> home.update { update(it, r.value).copy(pendingSections = it.pendingSections - name) }
+                is AppResult.Failure -> home.update { it.copy(errors = it.errors + (name to r.kind.message), pendingSections = it.pendingSections - name) }
+            }
+        }
+        listOf(
+            launch { section("每日推荐", { container.libraryRepository.daily() }) { s, d -> s.copy(daily = d.songs, forYou = d.forYou) } },
+            launch { section("每日推荐歌单", {
+                if (container.musicSettings.state.value.primarySource ==
+                    io.github.currencortex.music.data.song.MusicSource.NETEASE)
+                    container.neteaseLibrary.recommendedPlaylists()
+                else emptyList()
+            }) { s, d -> s.copy(recommendedPlaylists = d) } },
+            launch { section("最近播放", { container.libraryRepository.recent() }) { s, d -> s.copy(recent = d) } },
+            launch { section("我的歌单", {
+                // B站/QQ 模式走各自来源，只有网易云模式才用 primaryLibrary
+                if (container.musicSettings.state.value.primarySource ==
+                    io.github.currencortex.music.data.song.MusicSource.NETEASE)
+                    container.primaryLibrary.playlists()
+                else container.libraryRepository.playlists()
+            }) { s, d -> s.copy(playlists = d) } },
+        ).joinAll()
+        home.update { it.copy(loading = false, loaded = true, pendingSections = emptySet()) }
+    }
+    fun toggle(song: Song) = viewModelScope.launch {
+        when (val result = container.libraryRepository.toggleLike(song)) {
+            is AppResult.Failure -> container.errorNotices.show(result.kind.message)
+            is AppResult.Success -> message.value = "点赞已更新"
+        }
+    }
+    fun choosePlaylist(song: Song) {
+        if (song.emby != null) { message.value = "Emby 歌单当前仅支持浏览"; return }
+        if (busy.value) return
+        likes.dismiss()
+        selectedSong.value = song
+        availablePlaylists.value = emptyList()
+        playlistError.value = null
+        busy.value = true
+        val expected = container.musicSession()
+        playlistLoad = viewModelScope.launch {
+            try {
+                // Direct NetEase is the primary destination. Do not hold its picker behind a
+                // slow legacy library; custom CurrentMusic playlists remain available with
+                // the explicitly selected CurrentMusic library.
+                if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.NAVIDROME) {
+                    val expectedNav = container.navidrome.session()
+                    val result = appResult { container.navidrome.playlists().filter { it.owned }.map {
+                        Playlist(it.id.hashCode().toLong(), it.name, "", it.cover, "navidrome", 0, it.count, emptyList(), remoteId = it.id)
+                    } }
+                    if (expectedNav == container.navidrome.session() && selectedSong.value == song) when (result) {
+                        is AppResult.Success -> availablePlaylists.value = result.value
+                        is AppResult.Failure -> playlistError.value = result.kind.message
+                    }
+                    return@launch
+                }
+                val current = if (container.accountRepository.token == null) AppResult.Success(emptyList())
+                    else appResult { container.libraryRepository.playlists().filter { it.editable(container.accountRepository.state.value.account?.id ?: 0) } }
+                val native = appResult {
+                    if (container.bindingRepository.cachedStatus().bound) container.neteaseLibrary.playlists(fresh = true).filter { it.nativeOwned }
+                    else emptyList()
+                }
+                if (expected != container.musicSession()) return@launch
+                availablePlaylists.value = (native as? AppResult.Success)?.value.orEmpty() + (current as? AppResult.Success)?.value.orEmpty()
+                playlistError.value = listOfNotNull((native as? AppResult.Failure)?.kind?.message,
+                    (current as? AppResult.Failure)?.kind?.message).distinct().joinToString("；").ifBlank { null }
+            }
+            finally { busy.value = false }
+        }
+    }
+    fun addToPlaylist(playlist: Playlist) {
+        val song = selectedSong.value ?: return
+        if (playlist !in availablePlaylists.value) return
+        action("已加入歌单") {
+            if (playlist.source == "navidrome") container.navidrome.add(playlist.remoteId, song)
+            else if (playlist.source == "netease") container.neteaseLibrary.add(playlist.id, song)
+            else container.libraryRepository.add(playlist.id, listOf(song))
+            if (!song.privateLibrary) container.libraryRepository.invalidate(); selectedSong.value = null
+        }
+    }
+    private var likeUndoNotice: Long? = null
+    fun togglePrimaryLike(song: Song, undoable: Boolean = false) {
+        if (primaryLikeBusy.value || song.video) return
+        primaryLikeBusy.value = true
+        likeUndoNotice?.let(container.errorNotices::clear); likeUndoNotice = null
+        val expected = container.musicSession()
+        var restore: (suspend () -> Unit)? = null
+        viewModelScope.launch {
+            try {
+                when (val result = appResult {
+                    if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.EMBY) {
+                        val embySession = container.emby.session()
+                        restore = {
+                            if (embySession != container.emby.session()) throw ApiException(ErrorKind.Unauthorized)
+                            container.emby.setLiked(song, true); Unit
+                        }
+                        return@appResult container.emby.toggleLike(song)
+                    }
+                    if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.NAVIDROME) {
+                        val navSession = container.navidrome.session()
+                        restore = {
+                            if (navSession != container.navidrome.session()) throw ApiException(ErrorKind.Unauthorized)
+                            container.navidrome.setLiked(song, true); Unit
+                        }
+                        return@appResult container.navidrome.toggleLike(song)
+                    }
+                    val native = container.primaryLibrary.resolveLikeNetease()
+                    if (expected != container.musicSession()) throw ApiException(ErrorKind.Unauthorized)
+                    if (native) {
+                        val id = io.github.currencortex.music.data.song.NeteaseSongActionsRepository.songId(song) ?: throw ApiException(ErrorKind.NotFound)
+                        restore = { container.neteaseSongActions.setLiked(id, true, expected, song) }
+                        container.neteaseSongActions.toggleLiked(id, song)
+                    } else {
+                        restore = {
+                            when (val write = container.libraryRepository.setLiked(song, true)) {
+                                is AppResult.Failure -> throw ApiException(write.kind)
+                                is AppResult.Success -> Unit
+                            }
+                        }
+                        when (val write = container.libraryRepository.toggleLike(song)) {
+                        is AppResult.Success -> container.libraryRepository.statuses.value[song.id]?.liked == true
+                        is AppResult.Failure -> throw ApiException(write.kind)
+                        }
+                    }
+                }) {
+                    is AppResult.Success -> if (expected == container.musicSession()) {
+                        if (!song.privateLibrary) container.libraryRepository.invalidate()
+                        if (undoable && !result.value) {
+                            val restoreLike = requireNotNull(restore)
+                            likeUndoNotice = container.errorNotices.showUndo("已取消喜欢") {
+                                if (!primaryLikeBusy.value && expected == container.musicSession()) {
+                                    primaryLikeBusy.value = true
+                                    viewModelScope.launch {
+                                        try {
+                                            when (val undone = appResult {
+                                                if (expected != container.musicSession()) throw ApiException(ErrorKind.Unauthorized)
+                                                restoreLike()
+                                            }) {
+                                                is AppResult.Success -> if (expected == container.musicSession()) {
+                                                    if (!song.privateLibrary) container.libraryRepository.invalidate()
+                                                    container.errorNotices.showMessage("已恢复喜欢")
+                                                }
+                                                is AppResult.Failure -> if (expected == container.musicSession()) container.errorNotices.show(undone.kind.message)
+                                            }
+                                        } finally { primaryLikeBusy.value = false }
+                                    }
+                                }
+                            }
+                        } else message.value = if (result.value) "已加入我喜欢" else "已取消喜欢"
+                    }
+                    is AppResult.Failure -> if (expected == container.musicSession()) container.errorNotices.show(result.kind.message)
+                }
+            } finally { primaryLikeBusy.value = false }
+        }
+    }
+    fun create(name: String, description: String, done: () -> Unit) = action("歌单已创建") {
+        if (container.nativeNetease != null && container.primaryLibrary.resolveNetease()) container.neteaseLibrary.create(name)
+        else container.libraryRepository.create(name, description)
+        done()
+    }
+    fun action(success: String, block: suspend () -> Unit) {
+        if (busy.value) return
+        busy.value = true
+        val expected = container.musicSession()
+        viewModelScope.launch {
+            try {
+                when (val r = appResult {
+                    if (expected != container.musicSession()) throw ApiException(ErrorKind.Unauthorized)
+                    block()
+                }) {
+                    is AppResult.Success -> if (expected == container.musicSession()) message.value = success
+                    is AppResult.Failure -> if (expected == container.musicSession()) container.errorNotices.show(r.kind.message)
+                }
+            } finally { busy.value = false }
+        }
+    }
+    fun refreshSearchLikes(songs: List<Song>) = viewModelScope.launch { appResult {
+        val online = songs.filter { !it.privateLibrary && it.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL }
+        if (online.isEmpty()) return@appResult
+        if (container.primaryLibrary.resolveLikeNetease()) container.neteaseSongActions.likedIds()
+        else container.libraryRepository.refreshStatus(online.filterNot { it.video }.map { it.id })
+    } }
+    fun refreshStatuses(songs: List<Song>) = viewModelScope.launch { appResult {
+        val legacySongs = songs.filterNot { it.musicSource in setOf(io.github.currencortex.music.data.song.MusicSource.EMBY, io.github.currencortex.music.data.song.MusicSource.NAVIDROME,
+            io.github.currencortex.music.data.song.MusicSource.LOCAL) }
+        if (legacySongs.isEmpty()) return@appResult
+        if (container.primaryLibrary.resolveNetease()) container.neteaseSongActions.likedIds()
+        else container.libraryRepository.refreshStatus(legacySongs.filterNot { it.video }.map { it.id })
+    } }
+}
+
+data class LibraryDetailState(val loading: Boolean = true, val title: String = "", val description: String = "", val cover: String = "",
+    val songs: List<Song> = emptyList(), val playlist: Playlist? = null, val albums: List<Album> = emptyList(),
+    val more: Boolean = false, val moreAlbums: Boolean = false, val mv: MvDto? = null, val error: String? = null,
+    val loaded: Boolean = false, val refreshing: Boolean = false, val refreshError: String? = null)
+
+class LibraryDetailViewModel(val container: AppContainer, val route: String) : ViewModel() {
+    /** Explicit play intent: warm the shared URL/initial-byte cache without touching transport. */
+    fun preloadForPlayback(song: Song): Job = viewModelScope.launch {
+        if (song.video || container.playerController.state.value.mode != io.github.currencortex.music.core.media.PlayerMode.LOCAL) return@launch
+        try {
+            withTimeoutOrNull(5_000) {
+                val settings = container.musicSettings.state.value
+                if (container.audioCache.clearing.value) return@withTimeoutOrNull
+                val audio = container.audioSources.resolve(container.audioRequest(song, settings.quality))
+                container.audioCache.preload(audio.key, audio.source)
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { container.logger.info("Player", "Selected audio preload unavailable; playback will use the normal load path") }
+    }
+
+    val state = MutableStateFlow(LibraryDetailState())
+    val playbackMode = container.playerController.state.map { it.mode }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), container.playerController.state.value.mode)
+    private var task: Job? = null
+    private val kind = route.split('/')[1]
+    val id = route.substringAfterLast('/').toLongOrNull() ?: 0
+    fun editable(playlist: Playlist?, accountId: Long) = playlist?.let {
+        if (it.source == "netease") it.nativeOwned && !it.nativeLiked &&
+            container.bindingRepository.state.value?.let { binding ->
+                binding.bound && !binding.stale && it.ownerId == binding.profile?.uid
+            } == true
+        else it.editable(accountId)
+    } == true
+    fun removable(playlist: Playlist?, accountId: Long) = playlist?.let {
+        if (it.source == "netease") !it.nativeLiked &&
+            container.bindingRepository.state.value?.let { binding ->
+                val uid = binding.profile?.uid ?: 0L
+                binding.bound && !binding.stale && uid > 0 &&
+                    (if (it.nativeOwned) it.ownerId == uid else it.nativeSubscribed)
+            } == true
+        else it.editable(accountId)
+    } == true
+    suspend fun rename(name: String) {
+        if (state.value.playlist?.source == "netease") container.neteaseLibrary.rename(id, name)
+        else container.libraryRepository.rename(id, name)
+    }
+    suspend fun delete() {
+        val playlist = state.value.playlist ?: throw ApiException(ErrorKind.NotFound)
+        if (playlist.source == "netease") {
+            if (playlist.nativeOwned) container.neteaseLibrary.delete(id)
+            else container.neteaseLibrary.unsubscribe(id)
+        }
+        else container.libraryRepository.delete(id)
+    }
+    suspend fun remove(song: Song) {
+        if (state.value.playlist?.source == "netease") container.neteaseLibrary.remove(id, song)
+        else container.libraryRepository.remove(id, song)
+    }
+    init {
+        // LocalMusicScreen owns MediaStore scanning/permission state and uses the same
+        // playlist renderer. Cloud account/library revisions must not trigger a lookup.
+        if (kind != "local") viewModelScope.launch {
+            container.sessionRestored.await()
+            var identity: List<Any?>? = null
+            combine(container.accountRepository.state.map { it.account?.id }.distinctUntilChanged(),
+                container.musicSettings.state.map { it.server }.distinctUntilChanged(), container.libraryRepository.revision,
+                container.primaryLibrary.identity, container.neteaseLibrary.revision,
+                // Native heart changes update the row icons directly. They do not change
+                // a CurrentMusic playlist's membership, including during bulk imports.
+                container.neteaseSongActions.revision.map { if (kind == "playlist") 0L else it }.distinctUntilChanged()) { keys -> keys.toList() }
+                .combine(container.neteaseSessions.state.map { it.profile?.uid }.distinctUntilChanged()) { keys, uid -> keys + uid }
+                .collectLatest { keys ->
+                    val nextIdentity = keys.take(2) + keys.last()
+                    if (identity != nextIdentity) {
+                        task?.cancel()
+                        state.value = LibraryDetailState()
+                    }
+                    identity = nextIdentity
+                    reload()
+                }
+        }
+    }
+    fun reload(more: Boolean = false, force: Boolean = false) {
+        // Repeated pulls share the in-flight request; refresh only this resource's cache.
+        if (force && task?.isActive == true) return
+        task?.cancel()
+        val previous = state.value
+        state.value = previous.copy(loading = !previous.loaded || more,
+            refreshing = previous.loaded && !more, error = null, refreshError = null)
+        task = viewModelScope.launch {
+            when (val result = appResult {
+                when (kind) {
+                    "daily", "foryou" -> container.libraryRepository.daily(fresh = force).let { previous.copy(title = if (kind == "daily") "每日推荐" else "猜你喜欢", songs = if (kind == "daily") it.songs else it.forYou) }
+                    "likes" -> (if (container.musicSettings.state.value.primarySource ==
+                            io.github.currencortex.music.data.song.MusicSource.NETEASE)
+                        container.primaryLibrary.likedPlaylist(force) else null)?.let {
+                        previous.copy(title = it.name, description = it.description, cover = it.cover, songs = it.songs, playlist = it)
+                    } ?: previous.copy(title = "我喜欢的音乐", cover = "", description = "", playlist = null,
+                        songs = container.libraryRepository.likedSongs(fresh = force))
+                    "recent" -> previous.copy(title = "最近播放", songs = container.libraryRepository.recent(fresh = force))
+                    "ncmplaylist" -> container.neteaseLibrary.playlist(id, fresh = force).let { previous.copy(title = it.name,
+                        description = it.description, cover = it.cover, songs = it.songs, playlist = it) }
+                    "playlist" -> container.libraryRepository.playlist(id, fresh = force).let { previous.copy(title = it.name, description = it.description,
+                        cover = it.cover, songs = it.songs, playlist = it) }
+                    "artist" -> container.libraryRepository.artist(id, if (more) previous.songs.size else 0).let { previous.copy(title = it.name,
+                        description = it.description, cover = it.cover, songs = if (more) (previous.songs + it.songs).distinctBy(Song::id) else it.songs,
+                        albums = if (more) previous.albums else it.albums, more = it.more, moreAlbums = if (more) previous.moreAlbums else it.albumTotal > it.albums.size) }
+                    "album" -> container.libraryRepository.album(id).let { previous.copy(title = it.name, description = listOf(it.artist, it.description).filter(String::isNotBlank).joinToString("\n"),
+                        cover = it.cover, songs = it.songs) }
+                    "mv" -> container.libraryRepository.mv(id).let { previous.copy(title = it.name, cover = it.cover, description = listOf(it.artistName, it.desc.orEmpty()).filter(String::isNotBlank).joinToString("\n"), mv = it) }
+                    else -> throw ApiException(ErrorKind.NotFound)
+                }
+            }) {
+                is AppResult.Success -> {
+                    val merged = withContext(Dispatchers.Default) { previous.mergeFetched(result.value) }
+                    ensureActive()
+                    state.value = merged.copy(loading = false, loaded = true, refreshing = false, error = null, refreshError = null)
+                }
+                is AppResult.Failure -> {
+                    ensureActive()
+                    state.update { it.copy(loading = false, refreshing = false,
+                        error = result.kind.message.takeUnless { previous.loaded },
+                        refreshError = result.kind.message.takeIf { previous.loaded }) }
+                }
+            }
+        }
+    }
+    fun moreAlbums() {
+        if (state.value.loading) return
+        task = viewModelScope.launch {
+            state.update { it.copy(loading = true) }
+            when (val result = appResult { container.libraryRepository.artistAlbums(id, state.value.albums.size) }) {
+                is AppResult.Success -> state.update { it.copy(loading = false, albums = (it.albums + result.value.first).distinctBy(Album::id), moreAlbums = result.value.second) }
+                is AppResult.Failure -> state.update { it.copy(loading = false, error = result.kind.message) }
+            }
+        }
+    }
+    override fun onCleared() { task?.cancel() }
+}
+
+data class CatalogState(val query: String = "", val submitted: String = "", val albums: Boolean = false,
+    val loading: Boolean = false, val entries: List<CatalogEntry> = emptyList(), val more: Boolean = false, val error: String? = null)
+class CatalogViewModel(private val container: AppContainer, albums: Boolean, query: String) : ViewModel() {
+    val state = MutableStateFlow(CatalogState(query = query, albums = albums))
+    private var task: Job? = null
+    init {
+        viewModelScope.launch { container.musicSettings.state.map { it.server }.distinctUntilChanged().drop(1).collect { task?.cancel(); state.value = CatalogState(albums = albums) } }
+        if (query.isNotBlank()) search()
+    }
+    fun input(query: String) { state.update { it.copy(query = query) } }
+    fun search(more: Boolean = false) {
+        val before = state.value
+        val query = if (more) before.submitted else before.query.trim()
+        if (query.isBlank() || (more && before.loading)) return
+        task?.cancel()
+        state.update { it.copy(loading = true, error = null, submitted = query, entries = if (more) it.entries else emptyList()) }
+        task = viewModelScope.launch {
+            when (val result = appResult { container.libraryRepository.catalog(query, before.albums, if (more) before.entries.size else 0) }) {
+                is AppResult.Success -> state.update { it.copy(loading = false, entries = (if (more) before.entries else emptyList()) + result.value.entries, more = result.value.more) }
+                is AppResult.Failure -> state.update { it.copy(loading = false, error = result.kind.message) }
+            }
+        }
+    }
+}

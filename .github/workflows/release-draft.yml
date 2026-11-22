@@ -1,0 +1,67 @@
+name: Prepare release draft
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已验证并推送的本次 tag（vX.Y.Z）
+        required: true
+        type: string
+      previous_tag:
+        description: 上次已发布正式版本 tag
+        required: true
+        type: string
+      summary:
+        description: 中文更新摘要（不得把未验证的内容写成已验证）
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-draft-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  notes:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      target: ${{ steps.notes.outputs.target }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        id: notes
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_SUMMARY: ${{ inputs.summary }}
+        with:
+          script: |
+            await require('./.github/scripts/release-draft.cjs').prepare({github, context, core});
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-notes
+          path: release-draft.txt
+          if-no-files-found: error
+  draft:
+    needs: notes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-notes
+      - uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TARGET: ${{ needs.notes.outputs.target }}
+        with:
+          script: |
+            await require('./.github/scripts/release-draft.cjs').create({github, context, core});

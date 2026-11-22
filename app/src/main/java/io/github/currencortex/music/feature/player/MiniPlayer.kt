@@ -1,0 +1,216 @@
+package io.github.currencortex.music.feature.player
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.semantics.*
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import io.github.currencortex.music.feature.lyrics.data.SongLyricsStore
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.currencortex.music.core.media.PlayerMode
+import io.github.currencortex.music.core.media.PlayerState
+import io.github.currencortex.music.core.media.ListenTogetherPair
+import io.github.currencortex.music.data.song.Song
+import io.github.currencortex.music.ui.component.*
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.abs
+import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
+import androidx.compose.animation.core.*
+
+internal val CoverRotation = SemanticsPropertyKey<Float>("CoverRotation")
+
+internal val LocalPlayerArtworkRotation = staticCompositionLocalOf<State<Float>?> { null }
+
+private data class MiniTransport(
+    val song: Song?, val mode: PlayerMode, val canControlPlayback: Boolean,
+    val playing: Boolean, val loading: Boolean, val showPause: Boolean, val listenTogether: ListenTogetherPair?,
+)
+
+private fun PlayerState.miniTransport() =
+    MiniTransport(song, mode, canControlPlayback, playing, loading || resolving, showPause, listenTogether)
+
+/** One low-frequency playback subscription and one angle for mini, full and moving artwork. */
+@Composable internal fun rememberPlayerArtworkRotation(vm: PlayerViewModel): State<Float> {
+    val song by vm.currentSong.collectAsStateWithLifecycle()
+    val playback = remember(vm) { vm.state.map { it.song?.id to it.playing }.distinctUntilChanged() }
+    val status by playback.collectAsStateWithLifecycle(initialValue = null to false)
+    return rememberCoverRotation(song?.id, status.second && status.first == song?.id && song?.video != true)
+}
+
+/** Frame clock animation retains its angle while paused, and resets on a new track. */
+@Composable private fun rememberCoverRotation(songId: Long?, playing: Boolean): State<Float> {
+    val angle = remember(songId) { mutableFloatStateOf(0f) }
+    LaunchedEffect(songId, playing) {
+        if (playing && songId != null) {
+            var last = withInfiniteAnimationFrameNanos { it }
+            while (true) {
+                val frame = withInfiniteAnimationFrameNanos { it }
+                angle.floatValue = (angle.floatValue + (frame - last).coerceAtMost(250_000_000L) / 1_000_000_000f * 30f) % 360f
+                last = frame
+            }
+        }
+    }
+    return angle
+}
+
+@Composable internal fun MiniPlayer(vm: PlayerViewModel, onOpen: () -> Unit, onToggle: () -> Unit, modifier: Modifier = Modifier,
+    onNext: () -> Unit = { vm.player.next(vm.state.value.showPause) },
+    onPrevious: () -> Unit = { vm.player.previous(vm.state.value.showPause) }, onQueue: () -> Unit = onOpen,
+    onSurfaceBounds: (Rect) -> Unit = {}, active: Boolean = true,
+    onSurfaceCoordinates: (androidx.compose.ui.layout.LayoutCoordinates) -> Unit = {},
+    onArtworkOrigin: (() -> PlayerArtworkOrigin?) -> Unit = {}, artworkVisible: () -> Boolean = { true },
+    onOpenBounds: (Rect) -> Unit = {}, glow: (@Composable (Modifier) -> Unit)? = null) {
+    val playback = vm.state.collectAsStateWithLifecycle()
+    val queue = vm.queue.collectAsStateWithLifecycle()
+    val state by remember(playback) { derivedStateOf(structuralEqualityPolicy()) { playback.value.miniTransport() } }
+    val song by remember(queue) { derivedStateOf(structuralEqualityPolicy()) { queue.value.current } }
+    if (song == null && state.mode == PlayerMode.LOCAL) return
+    val enabled = state.canControlPlayback && song != null
+    val next by rememberUpdatedState(onNext)
+    val previous by rememberUpdatedState(onPrevious)
+    val allowed by rememberUpdatedState(enabled)
+    val threshold = with(LocalDensity.current) { 48.dp.toPx() }
+    val songKey = remember(song) { song?.let(SongLyricsStore::identity) }
+    val currentMatches = songKey != null && remember(state.song) { state.song?.let(SongLyricsStore::identity) } == songKey
+    // Keep transport ticks out of the row's composition. Only the ring and its
+    // accessible progress read these values, in drawing and semantics respectively.
+    val duration by remember(playback, currentMatches, song) {
+        derivedStateOf { (if (currentMatches) playback.value.durationMs.takeIf { it > 0 } else null) ?: song?.durationMs ?: 0L }
+    }
+    val progress by remember(playback, queue, currentMatches, song) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            val position = if (currentMatches) playback.value.positionMs else queue.value.positionMs
+            if (duration > 0) (position.toDouble() / duration).toFloat().coerceIn(0f, 1f) else 0f
+        }
+    }
+    val pair = state.listenTogether
+    val rotation = LocalPlayerArtworkRotation.current ?: rememberCoverRotation(song?.id, active && pair == null && state.playing && song?.video != true)
+    val coverAngle by rememberUpdatedState(rotation)
+    val coverBorder = MiuixTheme.colorScheme.onSurface.copy(alpha = .85f)
+    val borderColor by rememberUpdatedState(coverBorder)
+    val loading = state.loading
+    val openAreas = remember { arrayOfNulls<Rect>(2) }
+    val reportOpenBounds by rememberUpdatedState(onOpenBounds)
+    fun reportOpenArea(index: Int, coordinates: androidx.compose.ui.layout.LayoutCoordinates) {
+        openAreas[index] = coordinates.boundsInRoot()
+        val cover = openAreas[0] ?: return
+        val title = openAreas[1] ?: return
+        reportOpenBounds(Rect(minOf(cover.left, title.left), minOf(cover.top, title.top),
+            maxOf(cover.right, title.right), maxOf(cover.bottom, title.bottom)))
+    }
+    val loadingAngle = if (loading && active) {
+        val transition = rememberInfiniteTransition(label = "mini audio loading")
+        transition.animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "loading ring")
+    } else remember { mutableFloatStateOf(0f) }
+    var dragged by remember { mutableFloatStateOf(0f) }
+    val subtitle = when (state.mode) {
+        PlayerMode.ROOM -> if (pair != null) "双人一起听" else if (state.canControlPlayback) "房间控制" else "跟随房间"
+        else -> song?.artists.orEmpty()
+    }
+    val surface = LocalMusicGlassSurface.current
+    surface(modifier.fillMaxWidth().testTag("mini_player")) {
+        glow?.invoke(Modifier.matchParentSize().clip(CircleShape))
+        Row(Modifier.heightIn(min = 52.dp).onGloballyPositioned { onSurfaceBounds(it.boundsInRoot()); onSurfaceCoordinates(it) }
+            .playerSheetDrag(fromMini = true, enabled = song?.video != true)
+            .padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(if (pair == null) 42.dp else 42.dp * listeningPairArtworkAspectRatio).height(42.dp).onGloballyPositioned { coordinates ->
+                reportOpenArea(0, coordinates)
+                onArtworkOrigin {
+                    if (pair != null || !coordinates.isAttached) null else PlayerArtworkOrigin(
+                        Rect(coordinates.localToRoot(androidx.compose.ui.geometry.Offset.Zero),
+                            Size(coordinates.size.width.toFloat(), coordinates.size.height.toFloat())), coverAngle.value, borderColor)
+                }
+            }) {
+            if (pair != null) ListeningPairArtwork(pair, Modifier.fillMaxSize().testTag("mini_pair_artwork")
+                .clickable(onClick = onOpen))
+            else MusicCover(song?.cover.orEmpty(), Modifier.size(42.dp).testTag("mini_cover")
+                .playerMotionDiagnostics { this[CoverRotation] = rotation.value }
+                .graphicsLayer { rotationZ = rotation.value; alpha = if (artworkVisible()) 1f else 0f }.clip(CircleShape)
+                .border(2.dp, coverBorder, CircleShape).clickable(onClick = onOpen))
+            }
+            Column(Modifier.weight(1f).heightIn(min = 48.dp).padding(horizontal = 8.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .onGloballyPositioned { reportOpenArea(1, it) }
+                .testTag("mini_song_gesture")
+                .pointerInput(enabled, threshold) {
+                    detectHorizontalDragGestures(onDragStart = { dragged = 0f },
+                        onHorizontalDrag = { change, dx -> change.consume(); if (allowed) dragged += dx },
+                        onDragCancel = { dragged = 0f }, onDragEnd = {
+                            val offset = dragged; dragged = 0f
+                            if (allowed && abs(offset) >= threshold) { if (offset < 0f) next() else previous() }
+                        })
+                }.clickable(onClick = onOpen).semantics {
+                    if (enabled) customActions = listOf(CustomAccessibilityAction("上一首") { previous(); true }, CustomAccessibilityAction("下一首") { next(); true })
+                }, verticalArrangement = Arrangement.Center) {
+                val artistColor = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f)
+                MiniPlayerSongText(song?.name ?: "等待房间点歌", Modifier.fillMaxWidth().testTag("mini_title")
+                    .then(if (active) Modifier else Modifier.clearAndSetSemantics {}).graphicsLayer {
+                    translationX = dragged.coerceIn(-threshold * 2, threshold * 2) * .15f
+                }, color = MiuixTheme.colorScheme.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                val lyric = if (currentMatches) miniPlayerLyric(vm, songKey, song?.id, state.mode, active) else ""
+                MiniPlayerSongText(lyric.ifBlank { subtitle }, Modifier.fillMaxWidth().testTag("mini_lyric")
+                    .then(if (active) Modifier else Modifier.clearAndSetSemantics {}).graphicsLayer {
+                    translationX = dragged.coerceIn(-threshold * 2, threshold * 2) * .15f
+                }, subtitle = true, color = artistColor, fontSize = 11.sp,
+                    lyricTrackKey = songKey.takeIf { active && currentMatches })
+            }
+            MiniControl(if (state.showPause) "暂停" else "播放", onToggle, Modifier.testTag("mini_toggle").semantics {
+                progressBarRangeInfo = if (loading) ProgressBarRangeInfo.Indeterminate else ProgressBarRangeInfo(progress, 0f..1f)
+                stateDescription = if (loading) "正在加载音乐" else "播放进度"
+            }, enabled) { ink ->
+                val stroke = Stroke(1.6.dp.toPx())
+                drawCircle(ink.copy(alpha = .2f), radius = size.minDimension * .45f, style = stroke)
+                val buffered = if (currentMatches) playback.value.bufferedProgress(duration) else 0f
+                if (buffered > 0f) drawArc(ink.copy(alpha = .42f), startAngle = -90f,
+                    sweepAngle = 360f * buffered, useCenter = false,
+                    topLeft = Offset(size.width * .05f, size.height * .05f), size = Size(size.width * .9f, size.height * .9f),
+                    style = stroke)
+                if (loading || progress > 0f) drawArc(ink, startAngle = if (loading) loadingAngle.value - 90f else -90f,
+                    sweepAngle = if (loading) 100f else 360f * progress, useCenter = false,
+                    topLeft = Offset(size.width * .05f, size.height * .05f), size = Size(size.width * .9f, size.height * .9f),
+                    style = Stroke(1.6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                if (state.showPause) {
+                    drawRect(ink, Offset(size.width * .34f, size.height * .29f), Size(size.width * .1f, size.height * .42f))
+                    drawRect(ink, Offset(size.width * .56f, size.height * .29f), Size(size.width * .1f, size.height * .42f))
+                } else drawPath(Path().apply { moveTo(size.width * .4f, size.height * .28f); lineTo(size.width * .7f, size.height * .5f); lineTo(size.width * .4f, size.height * .72f); close() }, ink)
+            }
+            MiniControl("播放队列", onQueue, Modifier.testTag("mini_queue")) { ink ->
+                val line = 1.8.dp.toPx()
+                listOf(.25f, .5f, .75f).forEach { y -> drawLine(ink, Offset(size.width * .42f, size.height * y), Offset(size.width * .9f, size.height * y), line) }
+                drawPath(Path().apply { moveTo(size.width * .06f, size.height * .15f); lineTo(size.width * .32f, size.height * .3f); lineTo(size.width * .06f, size.height * .45f); close() }, ink)
+            }
+        }
+    }
+}
+
+@Composable private fun MiniControl(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true,
+    draw: androidx.compose.ui.graphics.drawscope.DrawScope.(androidx.compose.ui.graphics.Color) -> Unit) {
+    val ink = MiuixTheme.colorScheme.onSurface.copy(alpha = if (enabled) .9f else .3f)
+    Box(modifier.size(48.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .semantics { contentDescription = label; if (!enabled) disabled() }, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(25.dp)) { draw(ink) }
+    }
+}

@@ -1,0 +1,124 @@
+package io.github.currencortex.music.feature.player
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.*
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.currencortex.music.data.settings.LyricsTypography
+import io.github.currencortex.music.data.settings.LyricsWeight
+import io.github.currencortex.music.data.settings.LyricsDisplayOptions
+import io.github.currencortex.music.data.settings.LyricsStyle
+import io.github.currencortex.music.feature.lyrics.ui.lyricsFontWeight
+import io.github.currencortex.music.ui.component.MusicDestinationRow
+import io.github.currencortex.music.ui.component.AppleMusicLyricsControls
+import io.github.currencortex.music.feature.lyrics.ui.currentLyricsFontFamily
+import top.yukonga.miuix.kmp.basic.*
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import kotlin.math.roundToInt
+
+@Composable internal fun LyricsDisplaySettings(fontSize: Float, onFontSize: (Float) -> Unit, weightMode: LyricsWeight, onWeight: () -> Unit,
+    display: LyricsDisplayOptions, onDisplay: ((LyricsDisplayOptions) -> LyricsDisplayOptions) -> Unit,
+    onKaraokeScope: () -> Unit,
+    font: io.github.currencortex.music.data.settings.LyricsFont = io.github.currencortex.music.data.settings.LyricsFont.SYSTEM,
+    fontFile: String = "", onFont: (io.github.currencortex.music.data.settings.LyricsFont) -> Unit = {},
+    onFontFile: suspend (String) -> Unit = {}, previewText: String = "暂无歌词") {
+    val ink = MiuixTheme.colorScheme.onSurface
+    val classic = display.style == LyricsStyle.CLASSIC
+    val staged = classic && (display.smoke || display.particles)
+    var preview by remember(fontSize) { mutableFloatStateOf(fontSize) }
+    var strength by remember(display.fontWeight) { mutableIntStateOf(display.fontWeight) }
+    Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())
+        .testTag("lyrics_display_settings")) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+            Text(previewText, fontFamily = currentLyricsFontFamily(), fontSize = preview.sp, fontWeight = lyricsFontWeight(weightMode, true, strength),
+                maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                color = ink, modifier = Modifier.fillMaxWidth().testTag("lyrics_font_preview"))
+            LyricsFontSelector(font, fontFile, onFont, onFontFile)
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("字号 ${preview.roundToInt()}", fontSize = 16.sp, color = ink, modifier = Modifier.weight(1f))
+                Text("恢复默认", fontSize = 13.sp, color = ink.copy(alpha = .65f),
+                    modifier = Modifier.testTag("lyrics_font_reset").clickable(role = Role.Button) {
+                        preview = LyricsTypography.DEFAULT_SIZE; onFontSize(preview)
+                    }.padding(start = 12.dp, top = 12.dp, bottom = 12.dp))
+            }
+            Slider(value = preview, onValueChange = { preview = it.roundToInt().toFloat() },
+                onValueChangeFinished = { onFontSize(preview) },
+                valueRange = LyricsTypography.MIN_SIZE..LyricsTypography.MAX_SIZE,
+                modifier = Modifier.testTag("lyrics_font_size").semantics {
+                    contentDescription = "歌词字号"
+                    // Miuix's SetProgress callback does not call onValueChangeFinished.
+                    setProgress { target ->
+                        preview = LyricsTypography.normalize(target).roundToInt().toFloat()
+                        onFontSize(preview); true
+                    }
+                })
+        }
+        if (!classic) AppleMusicLyricsControls(display, onDisplay)
+        if (!staged) LyricsToggle("歌词居中对齐", display.centered, { value -> onDisplay { it.copy(centered = value) } }, "lyrics_centered")
+        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+            Text("字体粗细 $strength", fontSize = 16.sp, color = ink)
+            Slider(value = strength.toFloat(), onValueChange = { strength = ((it / 100).roundToInt() * 100).coerceIn(400, 900) },
+                onValueChangeFinished = { onDisplay { it.copy(fontWeight = strength) } }, valueRange = 400f..900f,
+                modifier = Modifier.testTag("lyrics_font_strength").semantics {
+                    contentDescription = "歌词字体粗细"
+                    setProgress { target ->
+                        if (!target.isFinite()) false else {
+                            strength = ((target / 100).roundToInt() * 100).coerceIn(400, 900)
+                            onDisplay { it.copy(fontWeight = strength) }; true
+                        }
+                    }
+                })
+            Text("400 常规 · 500 中等 · 600–900 合成加粗", fontSize = 12.sp, lineHeight = 18.sp,
+                color = ink.copy(alpha = .6f), modifier = Modifier.padding(top = 4.dp))
+        }
+        MusicDestinationRow("歌词字重", summary = weightMode.label, onClick = onWeight, modifier = Modifier.testTag("open_lyrics_weight"))
+        if (classic && android.os.Build.VERSION.SDK_INT >= 31) LyricsToggle("歌词视图模糊", display.blur,
+            { value -> onDisplay { it.copy(blur = value) } }, "lyrics_blur")
+        LyricsToggle("交错滚动效果", display.stagger, { value -> onDisplay { it.copy(stagger = value) } }, "lyrics_stagger")
+        if (classic && !staged) LyricsToggle("3D 倾斜歌词", display.perspective, { value -> onDisplay { it.copy(perspective = value) } },
+            "lyrics_perspective", "横竖屏 3D 透视，近大远小的歌词平面")
+        if (classic) LyricsToggle("歌词辉光", display.glow, { value -> onDisplay { it.copy(glow = value) } },
+            "lyrics_glow", "中长音与强调处渐亮，短音保持正常高亮")
+        if (classic) {
+            LyricsToggle("流烟歌词", display.smoke, { value -> onDisplay { it.copy(smoke = value, particles = if (value) false else it.particles).normalized() } },
+                "lyrics_smoke", "自动关闭 3D 并居中显示当前句，下一句在进度条上方预览；颜色随封面变化")
+            LyricsToggle("星尘歌词", display.particles, { value -> onDisplay { it.copy(particles = value, smoke = if (value) false else it.smoke).normalized() } },
+                "lyrics_particles", "文字逐字聚合、散作星尘，颜色随封面变化；与流烟、3D 效果互斥")
+        }
+        LyricsToggle("翻译歌词", display.translation, { value -> onDisplay { it.copy(translation = value) } },
+            "lyrics_translation", if (classic) "只显示正在播放的歌词翻译" else "显示每句歌词的翻译，与原文一起滚动")
+        LyricsToggle("罗马音", display.romanization, { value -> onDisplay { it.copy(romanization = value) } },
+            "lyrics_romanization", if (classic) "只显示正在播放的歌词罗马音" else "显示歌词提供的逐词音译、注音或整行罗马音")
+        LyricsToggle("逐字动画", display.wordAnimation, { value -> onDisplay { it.copy(wordAnimation = value) } }, "lyrics_word_animation")
+        if (display.wordAnimation) LyricsToggle("逐字上提", display.wordLift, { value -> onDisplay { it.copy(wordLift = value) } },
+            "lyrics_word_lift", "唱到的字轻轻上提，唱过后保持抬高")
+        if (classic) MusicDestinationRow("卡拉OK（逐字）歌词动画兼容策略",
+            summary = display.karaokeScope.label,
+            onClick = onKaraokeScope, modifier = Modifier.testTag("open_karaoke_scope"))
+        LyricsToggle("隐藏歌词界面控制面板", display.hideControls, { value -> onDisplay { it.copy(hideControls = value) } },
+            "lyrics_hide_controls", "歌词页底部可随时恢复控制")
+    }
+}
+
+@Composable private fun LyricsToggle(title: String, checked: Boolean, onChange: (Boolean) -> Unit, tag: String,
+    summary: String? = null, enabled: Boolean = true) {
+    val ink = MiuixTheme.colorScheme.onSurface
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag(tag).clickable(enabled = enabled, role = Role.Switch) { onChange(!checked) }
+        .semantics { toggleableState = if (checked) ToggleableState.On else ToggleableState.Off; if (!enabled) disabled() }
+        .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 10.dp)) {
+            Text(title, fontSize = 16.sp, color = ink)
+            if (summary != null) Text(summary, fontSize = 12.sp, lineHeight = 18.sp,
+                color = ink.copy(alpha = .6f), modifier = Modifier.padding(top = 3.dp))
+        }
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+    }
+}

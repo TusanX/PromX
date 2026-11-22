@@ -1,0 +1,330 @@
+package io.github.currencortex.music.feature.profile
+
+import android.content.ContentResolver
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import io.github.currencortex.music.AppContainer
+import io.github.currencortex.music.core.network.*
+import io.github.currencortex.music.data.profile.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.io.ByteArrayOutputStream
+
+data class ProfileState(val loading: Boolean = false, val profile: ProfileDto? = null, val error: String? = null,
+    val sectionErrors: List<String> = emptyList())
+class ProfileViewModel(val container: AppContainer, private val userId: Long? = null) : ViewModel() {
+    val state = MutableStateFlow(ProfileState())
+    val busy = MutableStateFlow(false)
+    val passwordCodeUntil = MutableStateFlow(0L)
+    val message = MutableStateFlow<String?>(null)
+    val dialog = MutableStateFlow<String?>(null)
+    val avatar = MutableStateFlow<Uri?>(null)
+    private val refresh = MutableStateFlow(0)
+    private fun session() = RequestSession(container.accountRepository.server, container.accountRepository.token)
+    init {
+        viewModelScope.launch {
+            container.sessionRestored.await()
+            // Only our own profile contains local account/library data. Public profiles
+            // must not reload when the viewer changes a music source or playlist.
+            val libraryChanges = if (userId == null) {
+                combine(container.primaryLibrary.identity,
+                    container.neteaseSessions.state.map { it.revision }.distinctUntilChanged(),
+                    container.libraryRepository.revision, container.neteaseLibrary.revision,
+                    container.audioSettings.state.map { it.provider }.distinctUntilChanged()) { _, _, _, _, _ -> Unit }
+                    .combine(container.neteaseSongActions.revision) { _, _ -> Unit }
+            } else flowOf(Unit)
+            combine(container.accountRepository.sessionRevision,
+                container.musicSettings.state.map { it.server }.distinctUntilChanged(), container.profileRepository.revision, refresh)
+                { _, _, _, _ -> Unit }
+                .combine(libraryChanges) { _, _ -> Unit }
+                .collectLatest { state.value = ProfileState(); load() }
+        }
+    }
+    fun reload() { refresh.update { it + 1 } }
+    suspend fun pollStats() {
+        while (currentCoroutineContext().isActive) {
+            refreshStats()
+            delay(30_000)
+        }
+    }
+    suspend fun refreshStats() {
+        val before = state.value.profile ?: return
+        if (state.value.loading) return
+        val expected = session()
+        when (val result = appResult {
+            if (userId == null) container.profileRepository.me().let { ProfileDto(it, it.stat) }
+            else container.profileRepository.profile(userId)
+        }) {
+            is AppResult.Success -> if (expected == session()) state.update { current ->
+                if (current.loading || current.profile !== before) current else current.copy(profile = before.copy(
+                    user = result.value.user, stat = result.value.stat, current = result.value.current))
+            }
+            is AppResult.Failure -> Unit
+        }
+    }
+    private suspend fun load() = withContext(Dispatchers.Default) {
+        if (userId == null && container.accountRepository.token == null) return@withContext
+        state.value = ProfileState(loading = true)
+        launch { appResult { container.profileRepository.loadScales() } }
+        when (val result = appResult {
+            if (userId != null) container.profileRepository.profile(userId) else {
+                val user = container.profileRepository.me()
+                val lists = async { appResult { container.primaryLibrary.playlists() } }
+                val recent = async { appResult { container.libraryRepository.recent() } }
+                val p = lists.await(); val r = recent.await()
+                val errors = listOfNotNull(if (p is AppResult.Failure) "歌单：${p.kind.message}" else null,
+                    if (r is AppResult.Failure) "最近播放：${r.kind.message}" else null)
+                state.update { it.copy(sectionErrors = errors) }
+                ProfileDto(user, user.stat,
+                    recent = (r as? AppResult.Success)?.value.orEmpty().map { it.dto() },
+                    playlists = (p as? AppResult.Success)?.value.orEmpty().map {
+                        io.github.currencortex.music.data.library.PlaylistDto(it.id, it.name, it.description, it.cover,
+                            it.source, it.ownerId, it.count)
+                    })
+            }
+        }) {
+            is AppResult.Success -> { ensureActive(); state.update { it.copy(loading = false, profile = result.value) } }
+            is AppResult.Failure -> { ensureActive(); state.update { it.copy(loading = false, error = result.kind.message) } }
+        }
+    }
+    private fun io.github.currencortex.music.data.song.Song.dto() = io.github.currencortex.music.data.song.SongDto(
+        id, name, artists, album, cover, durationMs, mv = mv, artistIds = artistIds)
+    fun action(success: String, block: suspend () -> Unit) {
+        if (busy.value) return
+        busy.value = true
+        viewModelScope.launch {
+            try { when (val r = appResult { block() }) {
+                is AppResult.Success -> message.value = success
+                is AppResult.Failure -> container.errorNotices.show(r.message)
+            } } finally { busy.value = false }
+        }
+    }
+    private suspend fun applyUser(user: ProfileUser, expected: RequestSession) {
+        if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
+        container.authRepository.updateAccount(container.profileRepository.account(user), expected)
+        dialog.value = null; avatar.value = null; reload()
+    }
+    fun update(nickname: String, bio: String, visible: Boolean?) = action("资料已更新") {
+        val expected = session(); applyUser(container.profileRepository.update(nickname, bio, visible, expected), expected)
+    }
+    fun upload(resolver: ContentResolver, crop: AvatarCrop? = null) = action("头像已更新") {
+        val uri = avatar.value ?: return@action
+        val expected = session()
+        val previousAvatar = container.accountRepository.state.value.account?.avatar.orEmpty()
+        val bytes = withContext(Dispatchers.IO) { avatarBytes(resolver, uri, crop) }
+        if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
+        applyUser(container.profileRepository.avatar(bytes, expected, previousAvatar), expected)
+    }
+    fun password(old: String, new: String) = action("密码已更新，请确认当前会话") {
+        container.profileRepository.password(old, new); dialog.value = null
+        container.authRepository.restore(container.accountRepository.server); reload()
+    }
+    fun passwordCode() {
+        if (android.os.SystemClock.elapsedRealtime() < passwordCodeUntil.value) return
+        action("验证码已发送，5 分钟内有效") {
+            container.profileRepository.sendPasswordCode()
+            passwordCodeUntil.value = android.os.SystemClock.elapsedRealtime() + 60_000
+        }
+    }
+    fun passwordWithEmailCode(code: String, new: String) = action("密码已更新，其他设备已下线") {
+        container.profileRepository.passwordWithEmailCode(code, new); dialog.value = null
+        container.authRepository.validateRestored(); reload()
+    }
+    companion object {
+        fun avatarBytes(resolver: ContentResolver, uri: Uri, crop: AvatarCrop? = null): ByteArray {
+            if (crop != null) return avatarCropBytes(resolver, uri, crop)
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, options) }
+            require(options.outWidth > 0 && options.outHeight > 0)
+            var sample = 1
+            while (maxOf(options.outWidth, options.outHeight) / sample > 1024) sample *= 2
+            val bitmap = resolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null,
+                BitmapFactory.Options().apply { inSampleSize = sample }) } ?: error("Invalid image")
+            try { return ByteArrayOutputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                out.toByteArray().also { require(it.size <= 1024 * 1024) }
+            } } finally { bitmap.recycle() }
+        }
+    }
+}
+
+data class DiscoverState(val query: String = "", val submitted: String = "", val sort: String = "composite",
+    val listening: Boolean = false, val loading: Boolean = false, val users: List<SquareUser> = emptyList(),
+    val total: Int = 0, val stats: SquareStats = SquareStats(), val error: String? = null,
+    val loaded: Boolean = false, val nextOffset: Int = 0, val hasMore: Boolean = true,
+    val loadingMore: Boolean = false, val failedMore: Boolean = false)
+internal val userSortOptions = listOf("composite" to "综合", "active" to "最近活跃", "level" to "等级", "reg" to "最新注册", "reg_asc" to "最早注册", "name" to "昵称",
+    "days" to "听歌天数", "listen" to "听歌时长", "likes" to "点赞数")
+class DiscoverViewModel(val container: AppContainer) : ViewModel() {
+    val state = MutableStateFlow(DiscoverState())
+    val styles = MutableStateFlow(io.github.currencortex.music.feature.style.StyleCatalogState())
+    private var styleTask: Job? = null
+    private var scalesTask: Job? = null
+    private val styleCoverTasks = mutableMapOf<Long, Job>()
+    private val styleCoverPermits = Semaphore(3)
+    private var styleGeneration = 0
+    private var task: Job? = null
+    private var requestGeneration = 0L
+    init {
+        viewModelScope.launch { container.ready.await(); submit() }
+        viewModelScope.launch {
+            container.ready.await()
+            container.musicSettings.state.map { it.server }.distinctUntilChanged().collect {
+                styleTask?.cancel(); styles.value = io.github.currencortex.music.feature.style.StyleCatalogState(); loadStyles()
+                scalesTask?.cancel(); scalesTask = viewModelScope.launch { appResult { container.profileRepository.loadScales() } }
+            }
+        }
+        viewModelScope.launch { container.musicSettings.state.map { it.server }.distinctUntilChanged().drop(1).collect {
+            ++requestGeneration; task?.cancel(); state.value = DiscoverState(); submit()
+        } }
+    }
+    fun loadStyles() {
+        styleTask?.cancel()
+        styleCoverTasks.values.forEach(Job::cancel)
+        styleCoverTasks.clear()
+        ++styleGeneration
+        styles.update { it.copy(loading = true, error = null, covers = emptyMap()) }
+        styleTask = viewModelScope.launch {
+            when (val result = appResult { container.musicStyles.list(fresh = true) }) {
+                is AppResult.Success -> styles.value = io.github.currencortex.music.feature.style.StyleCatalogState(styles = result.value, loading = false)
+                is AppResult.Failure -> styles.update { it.copy(loading = false, error = result.kind.message) }
+            }
+        }
+    }
+    /** Cards request only their first song, with bounded concurrency and per-server lifetime. */
+    fun loadStyleCover(id: Long) {
+        if (styles.value.covers.containsKey(id) || styleCoverTasks[id]?.isActive == true) return
+        val generation = styleGeneration
+        styleCoverTasks[id] = viewModelScope.launch {
+            val result = styleCoverPermits.withPermit { appResult { container.musicStyles.songs(id, 0, size = 1) } }
+            if (generation != styleGeneration) return@launch
+            val cover = (result as? AppResult.Success)?.value?.songs?.firstOrNull()?.cover.orEmpty()
+            styles.update { it.copy(covers = it.covers + (id to cover)) }
+        }
+    }
+    fun query(value: String) { state.update { it.copy(query = value) } }
+    fun sort(value: String) {
+        if (value == state.value.sort || userSortOptions.none { it.first == value }) return
+        state.update { it.copy(sort = value) }; submit(useDraft = false)
+    }
+    fun filter(value: Boolean) {
+        if (value == state.value.listening) return
+        state.update { it.copy(listening = value) }; submit(useDraft = false)
+    }
+    fun clearQuery() { val applied = state.value.submitted.isNotEmpty(); query(""); if (applied) submit() }
+    fun refresh() = submit(useDraft = false, preserve = true)
+    fun retry() { if (state.value.failedMore) submit(more = true) else refresh() }
+    fun submit(more: Boolean = false, useDraft: Boolean = !more, preserve: Boolean = false) {
+        if (more && (state.value.loading || !state.value.hasMore)) return
+        task?.cancel()
+        val generation = ++requestGeneration
+        val server = container.musicSettings.state.value.server
+        val request = state.value.copy(submitted = if (useDraft) state.value.query.trim() else state.value.submitted)
+        state.value = request.copy(loading = true, loadingMore = more, error = null, failedMore = false,
+            users = if (more || preserve) request.users else emptyList(),
+            loaded = (more || preserve) && request.loaded,
+            nextOffset = if (more || preserve) request.nextOffset else 0)
+        task = viewModelScope.launch {
+            when (val r = appResult { container.profileRepository.square(request.submitted, request.sort,
+                if (more) request.nextOffset else 0, request.listening) }) {
+                is AppResult.Success -> if (generation == requestGeneration && server == container.musicSettings.state.value.server) {
+                    val offset = (if (more) request.nextOffset else 0) + r.value.users.size
+                    state.update { it.copy(loading = false, loadingMore = false, loaded = true, users =
+                        (if (more) request.users + r.value.users else r.value.users).distinctBy(SquareUser::id),
+                        total = r.value.total, stats = r.value.stats, nextOffset = offset,
+                        hasMore = r.value.users.isNotEmpty() && offset < r.value.total) }
+                }
+                is AppResult.Failure -> if (generation == requestGeneration && server == container.musicSettings.state.value.server)
+                    state.update { it.copy(loading = false, loadingMore = false, error = r.kind.message, failedMore = more) }
+            }
+        }
+    }
+    suspend fun pollStats() {
+        while (currentCoroutineContext().isActive) {
+            refreshUsers()
+            delay(30_000)
+        }
+    }
+    suspend fun refreshUsers() {
+        val before = state.value
+        val generation = requestGeneration
+        val server = container.musicSettings.state.value.server
+        if (before.loaded && !before.loading && before.error == null) when (val r = appResult { container.profileRepository.square(before.submitted, before.sort, 0,
+            before.listening, limit = before.nextOffset.coerceAtLeast(30)) }) {
+            is AppResult.Success -> if (server == container.musicSettings.state.value.server &&
+                generation == requestGeneration && !state.value.loading && before.sort == state.value.sort &&
+                before.submitted == state.value.submitted && before.listening == state.value.listening) {
+                val updates = r.value.users.associateBy(SquareUser::id)
+                val previousIds = before.users.map { it.id }.toSet()
+                // Keep rows under the user's finger in place; an explicit refresh reapplies the ranking.
+                val users = before.users.mapNotNull { updates[it.id] } + r.value.users.filter { it.id !in previousIds }
+                state.update { it.copy(users = users.distinctBy(SquareUser::id), total = r.value.total, stats = r.value.stats,
+                    nextOffset = r.value.users.size, hasMore = r.value.users.isNotEmpty() && r.value.users.size < r.value.total) }
+            }
+            is AppResult.Failure -> Unit
+        }
+    }
+}
+
+data class DecorationState(val loading: Boolean = false, val catalog: DecorationsDto? = null, val query: String = "",
+    val preview: Decoration? = null, val error: String? = null)
+class DecorationViewModel(val container: AppContainer) : ViewModel() {
+    val state = MutableStateFlow(DecorationState())
+    val busy = MutableStateFlow(false)
+    val message = MutableStateFlow<String?>(null)
+    private var task: Job? = null
+    private var saving: Job? = null
+    private fun session() = RequestSession(container.accountRepository.server, container.accountRepository.token)
+    init {
+        viewModelScope.launch {
+            container.sessionRestored.await()
+            combine(container.accountRepository.sessionRevision,
+                container.musicSettings.state.map { it.server }.distinctUntilChanged()) { revision, server -> revision to server }
+                .collect {
+                    saving?.cancel(); busy.value = false; message.value = null
+                    state.value = DecorationState(); reload()
+                }
+        }
+    }
+    fun reload() {
+        val expected = session()
+        task?.cancel(); task = viewModelScope.launch {
+            state.update { it.copy(loading = true, error = null) }
+            when (val r = appResult { container.profileRepository.decorations(expected) }) {
+                is AppResult.Success -> state.update { old -> old.copy(loading = false, catalog = r.value,
+                    preview = old.preview?.takeIf { item -> item.id.isEmpty() || r.value.decorations.any { it.id == item.id } }) }
+                is AppResult.Failure -> state.update { it.copy(loading = false, error = r.kind.message) }
+            }
+        }
+    }
+    fun query(value: String) { state.update { it.copy(query = value) } }
+    fun preview(item: Decoration?) {
+        if (busy.value) return
+        message.value = null
+        state.update { it.copy(preview = item) }
+    }
+    fun set(id: String) {
+        if (busy.value) return
+        val catalog = state.value.catalog ?: return
+        if (id == catalog.current || (id.isNotEmpty() && (!catalog.unlocked || catalog.decorations.none { it.id == id }))) return
+        val expected = session()
+        busy.value = true
+        message.value = null
+        saving = viewModelScope.launch {
+            try { when (val r = appResult { container.profileRepository.decorate(id, expected) }) {
+                is AppResult.Success -> {
+                    message.value = if (id.isEmpty()) "已取消佩戴" else "挂件已设置"
+                    state.update { it.copy(preview = null, catalog = it.catalog?.copy(current = r.value.decoration)) }
+                    reload()
+                }
+                is AppResult.Failure -> container.errorNotices.show(r.kind.message)
+            } } finally { busy.value = false }
+        }
+    }
+    override fun onCleared() { task?.cancel(); saving?.cancel() }
+}

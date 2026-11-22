@@ -1,0 +1,35 @@
+name: Update PR branches
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize, unlabeled, edited]
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  update:
+    if: >-
+      github.repository == 'TusanX/PromX' && github.ref == 'refs/heads/main' &&
+      (github.event_name != 'pull_request_target' ||
+       (!github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'bot: skip'))) &&
+      (github.event.action != 'unlabeled' || github.event.label.name == 'bot: skip') &&
+      (github.event.action != 'edited' || github.event.changes.base != null)
+    concurrency:
+      group: update-pr-branches-${{ github.event.pull_request.number || 'main' }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Write token never executes PR-head code, build scripts or downloaded artifacts.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            await require('./.github/scripts/update-pr-branches.cjs').run({github, context, core});

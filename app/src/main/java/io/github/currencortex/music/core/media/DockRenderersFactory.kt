@@ -1,0 +1,93 @@
+package io.github.currencortex.music.core.media
+
+import android.content.Context
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+
+@androidx.annotation.OptIn(UnstableApi::class)
+internal class DockRenderersFactory(context: Context, private val meter: DockAudioLevel,
+    private val probe: TrackEnergyProbe? = null,
+    private val originalPreset: () -> NeteaseOriginalPreset? = { null },
+    private val originalFailure: (NeteaseOriginalPreset?, String) -> Unit = { _, _ -> },
+    private val originalProcessing: (NeteaseOriginalPreset) -> Unit = {},
+    private val outputSampleRate: () -> Int = { 0 },
+    private val outputSettings: () -> io.github.currencortex.music.data.settings.AudioOutputSettings = {
+        io.github.currencortex.music.data.settings.AudioOutputSettings(sampleRate = outputSampleRate()) },
+    private val outputStatus: (String) -> Unit = {},
+    private val diagnostics: io.github.currencortex.music.core.media.engine.AudioDiagnostics? = null,
+    private val primary: () -> Boolean = { true },
+    private val router: io.github.currencortex.music.core.media.engine.AudioOutputRouter? = null,
+    private val processingSettings: () -> io.github.currencortex.music.data.settings.AudioOutputSettings = outputSettings,
+    private val formatState: io.github.currencortex.music.core.media.engine.AudioFormatState = io.github.currencortex.music.core.media.engine.AudioFormatState(),
+    private val adaptiveSettings: () -> io.github.currencortex.music.data.settings.AdaptiveAudioSettings = { io.github.currencortex.music.data.settings.AdaptiveAudioSettings() },
+    private val hapticTimeline: MusicHapticTimeline = MusicHapticTimeline(),
+    private val adaptiveReport: (AdaptiveAudioRuntime) -> Unit = {}) : DefaultRenderersFactory(context) {
+    override fun buildAudioRenderers(context: Context, extensionRendererMode: Int,
+        mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector, enableDecoderFallback: Boolean,
+        audioSink: AudioSink, eventHandler: android.os.Handler,
+        eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
+        out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>) {
+        // The app uses platform audio decoders. Preserve the source's declared integer
+        // precision instead of Media3's automatic float preference in bit-perfect mode.
+        out.add(object : androidx.media3.exoplayer.audio.MediaCodecAudioRenderer(context, codecAdapterFactory,
+            mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener, audioSink) {
+            override fun getMediaFormat(format: androidx.media3.common.Format, codecMimeType: String,
+                codecMaxInputSize: Int, codecOperatingRate: Float): android.media.MediaFormat {
+                val result = super.getMediaFormat(format, codecMimeType, codecMaxInputSize, codecOperatingRate)
+                if (outputSettings().mode.rawPcm) {
+                    CurrentMusicAudioDiagnostics.format("source.declared", format)
+                    result.setInteger(android.media.MediaFormat.KEY_PCM_ENCODING,
+                        format.pcmEncoding.takeIf { it in BitPerfectAudioSink.PCM_ENCODINGS } ?: androidx.media3.common.C.ENCODING_PCM_16BIT)
+                    CurrentMusicAudioDiagnostics.record("decoder.requestedPcmEncoding=${result.getInteger(android.media.MediaFormat.KEY_PCM_ENCODING)}; source metadata is not decoded PCM")
+                }
+                return result
+            }
+            override fun onOutputFormatChanged(format: androidx.media3.common.Format, mediaFormat: android.media.MediaFormat?) {
+                runCatching {
+                    formatState.source(io.github.currencortex.music.core.media.engine.AudioPcmFormat(
+                        format.sampleRate.takeIf { it > 0 }, format.pcmEncoding.takeIf { it > 0 }, format.channelCount.takeIf { it > 0 }))
+                    if (primary()) diagnostics?.let(formatState::publish)
+                }
+                if (outputSettings().mode.rawPcm) {
+                    CurrentMusicAudioDiagnostics.format("source.declared", format)
+                    fun number(key: String) = mediaFormat?.takeIf { it.containsKey(key) }?.getInteger(key)
+                    CurrentMusicAudioDiagnostics.record("decoder.output rate=${number(android.media.MediaFormat.KEY_SAMPLE_RATE)} " +
+                        "encoding=${number(android.media.MediaFormat.KEY_PCM_ENCODING)} channels=${number(android.media.MediaFormat.KEY_CHANNEL_COUNT)}; absent fields are unknown, not hardware limitations")
+                }
+                if (outputSettings().mode.rawPcm &&
+                    format.sampleMimeType != androidx.media3.common.MimeTypes.AUDIO_RAW && mediaFormat != null &&
+                    format.pcmEncoding in BitPerfectAudioSink.PCM_ENCODINGS) {
+                    val actual = if (mediaFormat.containsKey(android.media.MediaFormat.KEY_PCM_ENCODING))
+                        mediaFormat.getInteger(android.media.MediaFormat.KEY_PCM_ENCODING) else androidx.media3.common.C.ENCODING_PCM_16BIT
+                    if (actual != format.pcmEncoding) {
+                        val reason = "${outputSettings().mode.label} 已停止：[DECODER_PCM_MISMATCH] 解码器输出 ${pcmLabel(actual)}($actual)，与源声明 ${pcmLabel(format.pcmEncoding)}(${format.pcmEncoding}) 不一致"
+                        CurrentMusicAudioDiagnostics.record(reason)
+                        outputStatus(reason)
+                        throw createRendererException(IllegalStateException(reason), format,
+                            androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED)
+                    }
+                }
+                super.onOutputFormatChanged(format, mediaFormat)
+            }
+        })
+    }
+    override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink {
+        val sink = BitPerfectAudioSink(context, DefaultAudioSink.Builder(context).setEnableFloatOutput(false)
+            .setEnableAudioOutputPlaybackParameters(false)
+            .setAudioOutputProvider(MusicAudioOutputProvider(context, outputSettings, outputStatus,
+                diagnostics = diagnostics, primary = primary, router = router))
+            // Keep the optional stage present before an engine import, so an existing
+            // playback session can begin using it without recreating the player.
+            .setAudioProcessors(arrayOf(NeteaseOriginalAudioProcessor({
+                if (processingSettings().mode.bypassProcessing) null else originalPreset()
+            }, originalFailure, originalProcessing), AdaptiveAudioProcessor({
+                val settings = adaptiveSettings()
+                if (processingSettings().mode.bypassProcessing) settings.copy(enabled = false) else settings
+            }, hapticTimeline, adaptiveReport), DockAudioProcessor(meter, probe), OutputSampleRateProcessor(requestedRate = {
+                if (processingSettings().mode.bypassProcessing) 0 else outputSampleRate()
+            }))).build(), outputSettings, outputStatus, diagnostics, primary)
+        return diagnostics?.let { io.github.currencortex.music.core.media.engine.DiagnosticAudioSink(sink, it, primary, formatState) } ?: sink
+    }
+}

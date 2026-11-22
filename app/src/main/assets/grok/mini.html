@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PromX Bot</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden; }
+  #bot64 { display: block; width: 100vw; height: 100vh; }
+
+</style>
+</head>
+<body>
+<svg id="bot64" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"></svg>
+<script src="geometry-data.js"></script>
+<script src="src/math.js"></script>
+<script src="src/tables.js"></script>
+<script src="src/pose.js"></script>
+<script src="src/tricks.js"></script>
+<script src="src/fx.js"></script>
+<script src="src/eyes.js"></script>
+<script src="src/character.js"></script>
+<script>
+  // 只初始化一个 64px 实例，动画逻辑全部来自仓库实现
+  var bot = new GrokCharacter(document.getElementById('bot64'), {
+    mode: 'onboarding', shape: 'blob', color: '#17635A', scheme: 'light',
+    loginWrap: false, sizePx: 64, followPointer: false
+  });
+  var el = document.getElementById('bot64');
+  el.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  // 缩放交由 Compose 层处理（WebView 布局放大 3 倍再缩回）
+  }
+  requestAnimationFrame(fitLoop);
+  // 按仓库实际设置的 viewBox 自适应缩放，避免裁掉四分之三
+
+  window.__bot = bot;
+</script>
+</body>
+</html>

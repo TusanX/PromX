@@ -1,0 +1,73 @@
+// Layout adapted from 123PanX / XBlocker / SukiSU-Ultra SendLogDialog, GPL-3.0-only.
+package io.github.currencortex.music.feature.logs
+
+import io.github.currencortex.music.ui.component.MusicDialogButton
+import android.content.Intent
+import io.github.currencortex.music.ui.util.showMusicMessage
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import io.github.currencortex.music.ui.util.showMusicError
+import io.github.currencortex.music.core.logging.AppLogger
+import io.github.currencortex.music.core.logging.DiagnosticExporter
+import io.github.currencortex.music.ui.component.MusicIcons
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.*
+import io.github.currencortex.music.ui.component.MusicOverlayDialog as OverlayDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
+
+@Composable
+fun LogExportDialog(show: Boolean, logger: AppLogger, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    suspend fun generate(action: suspend () -> Unit) {
+        busy = true
+        try { action() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            logger.warn("Diagnostics", "Unable to export logs", error)
+            context.showMusicError("导出失败，请重试")
+        } finally { busy = false }
+    }
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null && !busy) scope.launch { generate {
+            val file = DiagnosticExporter.create(context, logger)
+            try { DiagnosticExporter.save(context, file, uri) } finally { file.delete() }
+            context.showMusicMessage("日志已保存")
+        } }
+    }
+    OverlayDialog(show = show && !busy, title = "导出日志",
+        summary = "应用日志与设备信息会打包为 ZIP，并自动隐藏敏感信息。", onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth()) {
+            ArrowPreference(title = "保存日志", summary = "选择保存位置",
+                startAction = { Icon(MusicIcons.Download, null, Modifier.padding(end = 12.dp)) },
+                modifier = Modifier.testTag("export_logs_save"), onClick = {
+                    onDismiss()
+                    try { save.launch("${io.github.currencortex.music.core.config.AppMetadata.GITHUB_REPO}_logs_${System.currentTimeMillis()}.zip") }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { context.showMusicError("无法打开文件选择器") }
+                })
+            ArrowPreference(title = "分享日志", summary = "使用系统分享",
+                startAction = { Icon(MusicIcons.Share, null, Modifier.padding(end = 12.dp)) },
+                modifier = Modifier.testTag("export_logs_share"), onClick = {
+                    if (!busy) scope.launch { onDismiss(); generate {
+                        val file = DiagnosticExporter.create(context, logger)
+                        context.startActivity(Intent.createChooser(DiagnosticExporter.shareIntent(context, file), "分享日志"))
+                    } }
+                })
+            MusicDialogButton("取消", onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("export_logs_cancel"))
+        }
+    }
+    OverlayDialog(show = busy, title = "正在生成日志", onDismissRequest = {}) {
+        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    }
+}

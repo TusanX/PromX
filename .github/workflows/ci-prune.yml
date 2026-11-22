@@ -1,0 +1,48 @@
+name: Retain latest CI release
+on:
+  # One-time migration when this rule is merged, and later rule updates.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ci-prune.yml
+      - .github/scripts/ci-prune.cjs
+  # Clean only after Publish CI build completed successfully.
+  workflow_run:
+    workflows: [Publish CI build]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: retain-latest-ci-release
+  cancel-in-progress: false
+jobs:
+  prune:
+    if: >-
+      github.repository == 'TusanX/PromX' && github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      # Only use the trusted default branch. Never execute any PR-head code.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Check automation script syntax
+        run: node --check .github/scripts/ci-prune.cjs
+      - name: Remove old CI releases and their tags
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await require('./.github/scripts/ci-prune.cjs')
+              .prune({github,context,core});

@@ -1,0 +1,59 @@
+name: PR risk assessment
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+concurrency:
+  group: pr-risk-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const {classify,isInternalCiOnly} = require('./.github/scripts/pr-risk.cjs');
+            const {labelColor}=require('./.github/scripts/label-palette.cjs');
+            const pr = context.payload.pull_request;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...context.repo, pull_number: pr.number, per_page: 100
+            });
+            const {level, reason} = classify(files);
+            const live = await github.rest.pulls.get({...context.repo,pull_number:pr.number});
+            if (live.data.head.sha !== pr.head.sha) return;
+            const desired = new Set(['risk: ' + level]);
+            if (isInternalCiOnly(files, live.data.changed_files)) desired.add('ci-internal');
+            const current = live.data.labels.map(x => x.name);
+            for (const name of ['risk: low','risk: medium','risk: high','ci-internal']) {
+              if (desired.has(name) === current.includes(name)) continue;
+              if (!desired.has(name)) {
+                await github.rest.issues.removeLabel({...context.repo,issue_number:pr.number,name});
+                continue;
+              }
+              try {
+                await github.rest.issues.getLabel({...context.repo,name});
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                try {
+                  await github.rest.issues.createLabel({
+                    ...context.repo,name,color:labelColor(name),
+                    description:name === 'ci-internal' ? 'Internal CI changes excluded from release notes' : 'Automated PR change risk classification'
+                  });
+                } catch (creationError) {
+                  if (!creationError.response?.data?.errors?.some(e => e.code === 'already_exists')) throw creationError;
+                }
+              }
+              await github.rest.issues.addLabels({...context.repo,issue_number:pr.number,labels:[name]});
+            }
+            core.summary.addHeading('PR risk: ' + level).addRaw(reason).write();

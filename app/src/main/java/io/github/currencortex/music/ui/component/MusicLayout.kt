@@ -1,0 +1,123 @@
+package io.github.currencortex.music.ui.component
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/** End-of-list clearance for controls drawn over scrolling page content. */
+val LocalMusicBottomInset = staticCompositionLocalOf { 0.dp }
+/** Fixed composers avoid the dock without the extra clearance used by scrolling content. */
+val LocalMusicComposerBottomInset = staticCompositionLocalOf { 0.dp }
+/** Retained navigation pages yield input and animation while a sheet covers them. */
+// This changes on each page transition. Invalidate only readers, not every row of retained pages.
+val LocalMusicPageActive = androidx.compose.runtime.compositionLocalOf { true }
+
+@Composable fun musicScrollPadding(padding: PaddingValues = PaddingValues(20.dp)): PaddingValues {
+    val direction = LocalLayoutDirection.current
+    return PaddingValues(start = padding.calculateStartPadding(direction), top = padding.calculateTopPadding(),
+        end = padding.calculateEndPadding(direction), bottom = padding.calculateBottomPadding() + LocalMusicBottomInset.current)
+}
+
+@Composable fun MusicTextAction(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true,
+    destructive: Boolean = false) {
+    if(io.github.currencortex.music.ui.component.nativeui.LocalSettingsComponents.current) {
+        io.github.currencortex.music.ui.component.nativeui.GlassActionButton(label,onClick,modifier,
+            destructive=destructive,enabled=enabled,fillWidth=false)
+        return
+    }
+    Text(label, modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick).heightIn(min = 48.dp)
+        .padding(horizontal = if (LocalMusicDialogContent.current) 0.dp else 8.dp, vertical = 12.dp),
+        fontSize = 13.sp, fontWeight = FontWeight.Medium,
+        color = (if (destructive) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.primary).copy(alpha = if (enabled) 1f else .4f))
+}
+
+@Composable fun MusicSectionHeader(title: String, action: String? = null, onClick: () -> Unit = {}) {
+    if(io.github.currencortex.music.ui.component.nativeui.LocalSettingsComponents.current) {
+        io.github.currencortex.music.ui.component.nativeui.SettingsSectionHeader(title,action,onClick)
+        return
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        action?.let { MusicTextAction(it, onClick) }
+    }
+}
+
+@Composable fun MusicDestinationRow(title: String, onClick: () -> Unit, modifier: Modifier = Modifier,
+    summary: String? = null, enabled: Boolean = true, chevron: Boolean = true) {
+    val dialog = LocalMusicDialogContent.current
+    val press = rememberMusicDialogPress()
+    val clicks = remember { MutableInteractionSource() }
+    val ink = MiuixTheme.colorScheme.onBackground
+    val source=rememberPageNavigationSource(title,summary.orEmpty())
+    if(io.github.currencortex.music.ui.component.nativeui.LocalSettingsComponents.current&&!dialog) {
+        io.github.currencortex.music.ui.component.nativeui.SettingsPreference(title,summary,
+            modifier.then(if(chevron)source.modifier else Modifier),enabled,
+            onClick={if(chevron)source.open(onClick)else onClick()},
+            trailing={if(chevron)Text("›",fontSize=22.sp,color=ink.copy(alpha=.4f))})
+        return
+    }
+    Row(modifier.then(if(!dialog&&chevron)source.modifier else Modifier).fillMaxWidth().then(if (dialog) Modifier.drawBehind {
+        drawRect(ink.copy(alpha = .06f * press.amount.value))
+    }.then(if (enabled) Modifier.musicDialogRowPress(press) else Modifier) else Modifier)
+        .clickable(enabled = enabled, role = Role.Button, interactionSource = clicks,
+            indication = if (dialog) null else androidx.compose.foundation.LocalIndication.current,
+            onClick = {if(!dialog&&chevron)source.open(onClick)else onClick()})
+        .heightIn(min = if (dialog) 48.dp else 52.dp)
+        .padding(horizontal = if (!dialog) 16.dp else if (LocalMusicDialogEdgeToEdge.current) 24.dp else 0.dp,
+            vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, fontSize = 16.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else .4f))
+            summary?.let { Text(it, fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f),
+                maxLines = 2, overflow = TextOverflow.Ellipsis) }
+        }
+        if (chevron) Text("›", Modifier.padding(start = 12.dp), fontSize = 22.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .4f))
+    }
+}
+
+@Composable fun MusicTransportButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier,
+    enabled: Boolean = true, playing: Boolean = false, direction: Int = 0, prominent: Boolean = false) {
+    val color = if (prominent) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface
+    val ink = color.copy(alpha = if (enabled) 1f else .3f)
+    Box(modifier.size(if (prominent) 64.dp else 48.dp)
+        .background(if (prominent) MiuixTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent, CircleShape)
+        .clickable(enabled = enabled, role = Role.Button, onClick = onClick).semantics { contentDescription = label; if (!enabled) disabled() },
+        contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(if (prominent) 28.dp else 22.dp)) {
+            if (playing && direction == 0) {
+                drawRect(ink, Offset(size.width * .22f, size.height * .16f), Size(size.width * .18f, size.height * .68f))
+                drawRect(ink, Offset(size.width * .60f, size.height * .16f), Size(size.width * .18f, size.height * .68f))
+            } else {
+                val path = Path().apply {
+                    if (direction < 0) { moveTo(size.width * .78f, size.height * .14f); lineTo(size.width * .25f, size.height * .5f); lineTo(size.width * .78f, size.height * .86f) }
+                    else { moveTo(size.width * .22f, size.height * .14f); lineTo(size.width * .78f, size.height * .5f); lineTo(size.width * .22f, size.height * .86f) }
+                    close()
+                }
+                drawPath(path, ink)
+                if (direction != 0) drawRect(ink, Offset(size.width * if (direction > 0) .8f else .12f, size.height * .14f), Size(size.width * .08f, size.height * .72f))
+            }
+        }
+    }
+}

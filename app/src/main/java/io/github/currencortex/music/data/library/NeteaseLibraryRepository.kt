@@ -1,0 +1,230 @@
+package io.github.currencortex.music.data.library
+
+import io.github.currencortex.music.core.network.*
+import io.github.currencortex.music.data.binding.BindingRepository
+import io.github.currencortex.music.data.settings.MusicSettingsRepository
+import io.github.currencortex.music.data.song.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.*
+
+/** Upstream IDs stay separate from CurrentMusic's imported playlist IDs. */
+class NeteaseLibraryRepository(private val api: ApiClient, private val binding: BindingRepository,
+    private val actions: NeteaseSongActionsRepository, private val session: () -> RequestSession) {
+    val revision = MutableStateFlow(0L)
+    private val reads = SessionReadCache(session, { revision.value + actions.revision.value })
+    private val writeMutex = Mutex()
+    val directAvailable get() = api.hasLocalNeteaseLogin
+    fun invalidate() { reads.clear(); revision.update { it + 1 } }
+    private suspend fun owner(fresh: Boolean = false): Long {
+        val bound = if (fresh) binding.status() else binding.cachedStatus()
+        return bound.profile?.uid?.takeIf { bound.bound && !bound.stale && it > 0 }
+            ?: throw ApiException(ErrorKind.NeteaseBindingRequired)
+    }
+    private suspend fun request(path: String, query: Map<String, String>, expected: RequestSession): JsonObject {
+        val response = api.request("GET", "ncm/$path", query + ("timestamp" to "${System.currentTimeMillis()}"),
+            authenticated = true, expectedSession = expected, retryConnection = path != "playlist/tracks") as? JsonObject
+            ?: throw ApiException(ErrorKind.Parse)
+        if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
+        val code = response["code"]?.jsonPrimitive?.intOrNull
+        if (code != null && code != 200) throw ApiException(if (code in listOf(301, 401)) ErrorKind.NeteaseBindingRequired else ErrorKind.Server, code)
+        return response
+    }
+    suspend fun playlists(fresh: Boolean = false): List<Playlist> = withContext(Dispatchers.Default) {
+        val expectedOwner = session()
+        val uid = owner(fresh)
+        if (expectedOwner != session()) throw ApiException(ErrorKind.Unauthorized)
+        reads.read("playlists/$uid", fresh) { expected ->
+            if (expected != expectedOwner) throw ApiException(ErrorKind.Unauthorized)
+            val result = mutableListOf<Playlist>()
+            var offset = 0
+            do {
+                val response = request("user/playlist", mapOf("uid" to "$uid", "limit" to "100", "offset" to "$offset"), expected)
+                val page = response["playlist"] as? JsonArray ?: throw ApiException(ErrorKind.Parse)
+                result += page.mapNotNull { (it as? JsonObject)?.toPlaylist(uid) }
+                offset += page.size
+                val more = response["more"]?.jsonPrimitive?.booleanOrNull == true
+                if (!more || page.isEmpty()) break
+            } while (true)
+            result.distinctBy { it.id }
+        }
+    }
+    suspend fun recommendedPlaylists(fresh: Boolean = false): List<Playlist> = withContext(Dispatchers.Default) {
+        val expectedOwner = session()
+        val uid = owner(fresh)
+        if (expectedOwner != session()) throw ApiException(ErrorKind.Unauthorized)
+        reads.read("recommended-playlists/$uid", fresh) { expected ->
+            if (expected != expectedOwner) throw ApiException(ErrorKind.Unauthorized)
+            val response = request("recommend/resource", emptyMap(), expected)
+            val recommendations = response["recommend"] as? JsonArray ?: throw ApiException(ErrorKind.Parse)
+            recommendations.mapNotNull { entry ->
+                val raw = entry as? JsonObject ?: return@mapNotNull null
+                raw.toPlaylist(uid)?.let { playlist ->
+                    playlist.copy(
+                        cover = (raw["picUrl"] as? JsonPrimitive)?.contentOrNull
+                            ?.takeIf(String::isNotBlank)?.replace("http:", "https:") ?: playlist.cover,
+                        description = (raw["copywriter"] as? JsonPrimitive)?.contentOrNull
+                            ?.takeIf(String::isNotBlank) ?: playlist.description)
+                }
+            }.distinctBy { it.id }
+        }
+    }
+    private suspend fun songs(ids: List<Long>, expected: RequestSession, known: List<Song> = emptyList()): List<Song> {
+        val found = known.associateByTo(mutableMapOf()) { it.id }
+        // Direct NetEase accepts up to 1000 IDs; retain the legacy gateway's smaller limit.
+        ids.distinct().filterNot(found::containsKey).chunked(if (directAvailable) 500 else 100).forEach { chunk ->
+            val response = request("song/detail", mapOf("ids" to chunk.joinToString(",")), expected)
+            val page = response["songs"] as? JsonArray ?: throw ApiException(ErrorKind.Parse)
+            page.mapNotNull { (it as? JsonObject)?.let(NeteaseSongActionsRepository::nativeSong) }.forEach { found[it.id] = it }
+        }
+        return ids.mapNotNull(found::get)
+    }
+    suspend fun playlist(id: Long, fresh: Boolean = false): Playlist = withContext(Dispatchers.Default) {
+        val expectedOwner = session()
+        val uid = owner(fresh)
+        if (expectedOwner != session()) throw ApiException(ErrorKind.Unauthorized)
+        reads.read("playlist/$uid/$id", fresh) { expected ->
+            if (expected != expectedOwner) throw ApiException(ErrorKind.Unauthorized)
+            val response = request("playlist/detail", mapOf("id" to "$id", "s" to "0"), expected)
+            val raw = response["playlist"] as? JsonObject ?: throw ApiException(ErrorKind.Parse)
+            val info = raw.toPlaylist(uid) ?: throw ApiException(ErrorKind.Parse)
+            if (info.id != id) throw ApiException(ErrorKind.Parse)
+            val ids = (raw["trackIds"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.get("id")?.jsonPrimitive?.longOrNull }
+            val embedded = (raw["tracks"] as? JsonArray)?.mapNotNull {
+                (it as? JsonObject)?.let(NeteaseSongActionsRepository::nativeSong)
+            }
+            val tracks = if (ids != null) songs(ids, expected, embedded.orEmpty()) else {
+                (embedded ?: throw ApiException(ErrorKind.Parse)).also {
+                    if (it.size < info.count) throw ApiException(ErrorKind.Parse)
+                }
+            }
+            info.copy(songs = tracks)
+        }
+    }
+    suspend fun likedPlaylist(fresh: Boolean = false): Playlist = withContext(Dispatchers.Default) {
+        val expected = session()
+        val info = playlists(fresh).firstOrNull { it.nativeLiked && it.nativeOwned }
+            ?: throw ApiException(ErrorKind.NeteaseLikedPlaylistUnavailable)
+        // Membership comes from the user's red-heart list, including acknowledged writes
+        // while upstream playlist/detail is still catching up.
+        if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
+        reads.read("liked/${info.ownerId}/${info.id}", fresh) { owner ->
+            if (owner != expected) throw ApiException(ErrorKind.Unauthorized)
+            val likedIds = actions.likedIds(fresh)
+            val detail = request("playlist/detail", mapOf("id" to "${info.id}", "s" to "0"), expected)
+            val raw = detail["playlist"] as? JsonObject ?: throw ApiException(ErrorKind.Parse)
+            if (raw["id"]?.jsonPrimitive?.longOrNull != info.id) throw ApiException(ErrorKind.Parse)
+            val embedded = (raw["tracks"] as? JsonArray).orEmpty().mapNotNull {
+                (it as? JsonObject)?.let(NeteaseSongActionsRepository::nativeSong)
+            }
+            // Red-heart IDs determine membership; playlist/detail determines display order.
+            val playlistIds = (raw["trackIds"] as? JsonArray)?.mapNotNull {
+                (it as? JsonObject)?.get("id")?.jsonPrimitive?.longOrNull
+            } ?: embedded.map { it.id }
+            val orderedIds = playlistIds.filter { it in likedIds }.distinct()
+            val orderedSet = orderedIds.toSet()
+            // Recently confirmed likes may reach the heart list before playlist/detail.
+            val ids = likedIds.filterNot { it in orderedSet } + orderedIds
+            val tracks = songs(ids, expected, embedded)
+            if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
+            info.copy(name = "我喜欢的音乐", songs = tracks, count = tracks.size)
+        }
+    }
+    suspend fun add(id: Long, song: Song) = addAll(id, listOf(song))
+    suspend fun addAll(id: Long, songs: List<Song>) = writeMutex.withLock {
+        require(songs.isNotEmpty() && songs.size <= 1000)
+        val tracks = songs.associateBy { NeteaseSongActionsRepository.songId(it) ?: throw ApiException(ErrorKind.NotFound) }
+        val expected = session()
+        val uid = owner(fresh = true)
+        val target = playlists(fresh = true).firstOrNull { it.id == id && it.ownerId == uid && it.nativeOwned }
+            ?: throw ApiException(ErrorKind.Forbidden)
+        if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
+        try {
+            if (target.nativeLiked) tracks.forEach { (songId, song) -> actions.setLiked(songId, true, expected, song) }
+            else request("playlist/tracks", mapOf("pid" to "$id", "tracks" to tracks.keys.joinToString(","), "op" to "add", "confirm" to "1"), expected)
+        } finally { invalidate() }
+    }
+    suspend fun create(name: String) = writeMutex.withLock {
+        require(name.trim().isNotBlank())
+        val expected = session(); owner(fresh = true)
+        request("playlist/create", mapOf("name" to name.trim()), expected)
+        invalidate()
+    }
+    private suspend fun editable(id: Long, expected: RequestSession) {
+        val uid = owner(fresh = true)
+        if (expected != session() || playlists(fresh = true).none {
+            it.id == id && it.ownerId == uid && it.nativeOwned && !it.nativeLiked
+        }) throw ApiException(ErrorKind.Forbidden)
+    }
+    suspend fun rename(id: Long, name: String) = writeMutex.withLock {
+        require(name.trim().isNotBlank()); val expected = session(); editable(id, expected)
+        request("playlist/name/update", mapOf("id" to "$id", "name" to name.trim()), expected); invalidate()
+    }
+    suspend fun delete(id: Long) = writeMutex.withLock {
+        val expected = session(); editable(id, expected)
+        request("playlist/delete", mapOf("id" to "$id"), expected); invalidate()
+    }
+    suspend fun unsubscribe(id: Long) = writeMutex.withLock {
+        val expected = session()
+        owner(fresh = true)
+        val target = playlists(fresh = true).firstOrNull { it.id == id }
+            ?: throw ApiException(ErrorKind.Forbidden)
+        if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
+        if (target.nativeOwned || target.nativeLiked) throw ApiException(ErrorKind.Forbidden)
+        request("playlist/subscribe", mapOf("id" to "$id", "t" to "2"), expected)
+        invalidate()
+    }
+    suspend fun remove(id: Long, song: Song) = writeMutex.withLock {
+        val songId = NeteaseSongActionsRepository.songId(song) ?: throw ApiException(ErrorKind.NotFound)
+        val expected = session(); editable(id, expected)
+        request("playlist/tracks", mapOf("pid" to "$id", "tracks" to "$songId", "op" to "del"), expected); invalidate()
+    }
+    private fun JsonObject.toPlaylist(uid: Long): Playlist? {
+        val id = this["id"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0 } ?: return null
+        val creator = this["creator"] as? JsonObject
+        val owner = creator?.get("userId")?.jsonPrimitive?.longOrNull ?: this["userId"]?.jsonPrimitive?.longOrNull ?: 0
+        return Playlist(id, this["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            this["description"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            this["coverImgUrl"]?.jsonPrimitive?.contentOrNull.orEmpty().replace("http:", "https:"),
+            "netease", owner, this["trackCount"]?.jsonPrimitive?.intOrNull ?: 0, emptyList(),
+            nativeOwned = owner == uid, nativeLiked = this["specialType"]?.jsonPrimitive?.intOrNull == 5,
+            nativeSubscribed = this["subscribed"]?.jsonPrimitive?.booleanOrNull == true)
+    }
+}
+
+/** Bound accounts can use the live NetEase library without importing CurrentMusic snapshots. */
+class PrimaryMusicLibrary(private val current: LibraryRepository, private val netease: NeteaseLibraryRepository,
+    private val binding: BindingRepository, private val settings: MusicSettingsRepository, scope: CoroutineScope) {
+    val identity = combine(binding.state, settings.state.map { it.neteaseMainLibrary }.distinctUntilChanged()) { bound, preferred ->
+        Triple(preferred && bound?.bound == true, bound?.profile?.uid ?: 0, bound?.stale == true)
+    }.stateIn(scope, SharingStarted.Eagerly, Triple(false, 0L, false))
+    val usesNetease = identity.map { it.first }.stateIn(scope, SharingStarted.Eagerly, false)
+    suspend fun resolveNetease(): Boolean = settings.snapshot().neteaseMainLibrary && binding.cachedStatus().bound
+    val likesUseNetease = combine(binding.state, settings.state.map { it.likeMode }.distinctUntilChanged()) { bound, mode ->
+        mode.useNetease(bound?.bound == true)
+    }.stateIn(scope, SharingStarted.Eagerly, false)
+    suspend fun resolveLikeNetease(): Boolean = settings.snapshot().likeMode.useNetease(binding.cachedStatus().bound)
+    suspend fun playlists(fresh: Boolean = false): List<Playlist> = coroutineScope {
+        if (fresh) current.clearReads()
+        // Imported NetEase playlists are snapshots with CurrentMusic IDs. Once the live
+        // library succeeds it owns membership; stale snapshots must not resurrect removals.
+        // Keep CurrentMusic playlists even when their numeric IDs match native playlists.
+        val cloud = async { appResult { if (current.hasCurrentMusicAccount) current.playlists() else emptyList() } }
+        val native = appResult { if (resolveNetease()) netease.playlists(fresh) else null }
+        val saved = cloud.await()
+        if (saved is AppResult.Failure && native is AppResult.Failure) throw ApiException(saved.kind, saved.status)
+        val live = (native as? AppResult.Success)?.value
+        val snapshots = (saved as? AppResult.Success)?.value.orEmpty().filterNot {
+            live != null && it.source in setOf("ncm", "netease")
+        }
+        val combined = snapshots + live.orEmpty()
+        if (combined.isEmpty() && live == null) {
+            if (saved is AppResult.Failure) throw ApiException(saved.kind, saved.status)
+            if (native is AppResult.Failure) throw ApiException(native.kind, native.status)
+        }
+        combined.distinctBy { it.source to it.id }
+    }
+    suspend fun likedPlaylist(fresh: Boolean = false): Playlist? = if (resolveNetease()) netease.likedPlaylist(fresh) else null
+}

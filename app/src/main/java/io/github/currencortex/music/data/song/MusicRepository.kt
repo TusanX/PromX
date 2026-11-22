@@ -1,0 +1,292 @@
+package io.github.currencortex.music.data.song
+
+import io.github.currencortex.music.core.media.AudioQuality
+import io.github.currencortex.music.core.network.*
+import kotlinx.serialization.json.*
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import io.github.currencortex.music.data.settings.AudioProvider
+import io.github.currencortex.music.data.settings.AudioSourceAccess
+import io.github.currencortex.music.data.settings.LyricsSource
+import io.github.currencortex.music.feature.lyrics.model.LyricsDocument
+import kotlinx.coroutines.withTimeoutOrNull
+
+class MusicRepository(private val api: ApiClient,
+    private val audioAccess: () -> AudioSourceAccess = { AudioSourceAccess(AudioProvider.CURRENT_MUSIC) },
+    private val leiz: LeizAudioClient = LeizAudioClient(),
+    private val navidrome: io.github.currencortex.music.data.navidrome.NavidromeRepository? = null,
+    private val lx: io.github.currencortex.music.data.lx.LxSourceStore? = null,
+    private val emby: io.github.currencortex.music.data.emby.EmbyRepository? = null,
+    /** B站 会话 Cookie：新版视频的播放地址要按会话签名，不带就会 403 */
+    private val biliCookie: (() -> String)? = null,
+    /** QQ 音乐会话：会员曲的 vkey 必须带登录态，否则只能拿到免费试听 */
+    private val qqCookie: (() -> io.github.currencortex.music.core.alt.QqSessionStore?)? = null) {
+    val insights = SongInsightsRepository(api)
+    suspend fun previewClip(song: Song): SongPreviewClip {
+        val id = NeteaseSongActionsRepository.songId(song)
+        val segments = if (song.navidrome == null && id != null) {
+            when (val response = appResult { insights.chorus(song) }) {
+                is AppResult.Success -> response.value
+                is AppResult.Failure -> emptyList()
+            }
+        } else emptyList()
+        return songPreviewClip(segments, song.durationMs)
+    }
+    suspend fun detail(song: Song): Song = when (song.musicSource) {
+        MusicSource.EMBY -> requireNotNull(emby).detail(song)
+        MusicSource.LOCAL -> song
+        MusicSource.NAVIDROME -> requireNotNull(navidrome).detail(song)
+        else -> detail(song.id)
+    }
+    suspend fun lyricsDocument(song: Song) = if (song.musicSource == MusicSource.EMBY) appResult {
+        io.github.currencortex.music.feature.lyrics.model.LyricsDocument(metadata = io.github.currencortex.music.feature.lyrics.model.LyricsMetadata(source = "Emby"))
+    } else if (song.musicSource == MusicSource.NAVIDROME) appResult { requireNotNull(navidrome).lyrics(song) } else lyricsDocument(song.id)
+    suspend fun source(song: Song, quality: AudioQuality, session: RequestSession? = null, refresh: Boolean = false): AudioSource {
+        if (song.musicSource == MusicSource.NAVIDROME) return requireNotNull(navidrome).source(song, quality)
+        if (song.musicSource == MusicSource.EMBY) return requireNotNull(emby).source(song)
+        // 备用音源：解析出带 Referer 的本地代理地址后直接播放
+        if (song.musicSource == MusicSource.BILIBILI) {
+            // 本地缓存文件：不走网络，直接播
+            if (song.localUri.isNotBlank() &&
+                (song.localUri.startsWith("content://") || song.localUri.startsWith("file:"))) {
+                return AudioSource(song.localUri, "cached", 44100, 2, format = "mp4",
+                    source = "bilibili-cache", validForSeconds = 3600)
+            }
+            val bvid = song.externalIds.bilibiliBvid ?: song.localUri
+            // 搜索结果里没带 cid 时，播放前现取一次（B站 playurl 必须要 cid）
+            val cid = song.externalIds.bilibiliCid?.takeIf { it.isNotBlank() }
+                ?: io.github.currencortex.music.core.alt.AltSources.bilibiliCid(bvid).orEmpty()
+            val cookie = biliCookie?.invoke().orEmpty()
+            // 优先整段 mp4：它同时带画面和声音，视频模式可以直接把同一路流挂到画面上，
+            // 不需要第二个播放器，也就结构上不可能出现叠音。
+            io.github.currencortex.music.core.alt.BiliPlayback.plan(
+                bvid, cid, io.github.currencortex.music.core.alt.BiliQuality.preferredQn, cookie)?.mp4?.let { mp4 ->
+                return AudioSource(mp4, "standard", 44100, 2, format = "mp4", source = "bilibili", validForSeconds = 600)
+            }
+            val resolved = io.github.currencortex.music.core.alt.BiliPlayback.resolve(bvid, cid, cookie)
+            val url = resolved.url
+                ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable, userMessage =
+                    if (resolved.needsLogin) "这条视频的音频地址需要登录 B站 才能获取，请到「我的 → 哔哩哔哩」扫码登录"
+                    else "B站这条拿不到音频（可能已下架或需要大会员）")
+            return AudioSource(url, "standard", 44100, 2, format = "aac", source = "bilibili", validForSeconds = 600)
+        }
+        if (song.musicSource == MusicSource.QQ_MUSIC) {
+            val mid = song.externalIds.qqMusicId ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable, userMessage = "QQ音乐缺少歌曲 ID")
+            val qqSession = qqCookie?.invoke()
+            val url = io.github.currencortex.music.core.alt.AltSources.qqPlayable(
+                mid,
+                cookie = qqSession?.cookieHeader().orEmpty(),
+                uin = qqSession?.uin.orEmpty().ifBlank { "0" },
+            )
+            // 拿不到 vkey 就明确报错：绝不用别家的音源冒充 QQ 原曲
+            ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable,
+                userMessage = if (qqSession == null) "这首歌需要登录 QQ 音乐后才能播放"
+                else "这首歌需要 QQ 音乐会员（当前账号没有会员或已下架）")
+            return AudioSource(url, "standard", 44100, 2, format = "m4a", source = "qq", validForSeconds = 600)
+        }
+        val access = audioAccess()
+        return if (access.provider == AudioProvider.LX) lxSource(song, quality, access) else source(song.id, quality, session, refresh)
+    }
+    private suspend fun lxSource(song: Song, quality: AudioQuality, access: AudioSourceAccess): AudioSource {
+        val result = try { requireNotNull(lx) { "落雪音源尚未初始化" }.source(song, quality, access.lxSourceId) }
+            catch (e: io.github.currencortex.music.data.lx.LxSourceException) { throw ApiException(ErrorKind.Server, userMessage = e.message) }
+        if (audioAccess().identity != access.identity) throw ApiException(ErrorKind.AudioSourceChanged)
+        return result
+    }
+    private fun parseDocument(raw: JsonObject): io.github.currencortex.music.feature.lyrics.model.LyricsDocument {
+        val code = raw["code"]?.jsonPrimitive?.intOrNull
+        if (code != null && code != 200) throw ApiException(ErrorKind.Server, code)
+        return io.github.currencortex.music.feature.lyrics.parser.LyricsParser.parse(raw)
+    }
+    suspend fun search(keyword: String, offset: Int = 0, backend: SearchBackend? = null): AppResult<SearchPage> =
+        searchPage(keyword, offset, "song", backend)
+
+    private suspend fun searchPage(keyword: String, offset: Int, type: String, backend: SearchBackend?): AppResult<SearchPage> = appResult {
+        val owner = api.publicSession()
+        val revision = api.netease?.sessions?.state?.value?.revision
+        val query = mapOf("keywords" to keyword, "offset" to "$offset", "limit" to "30", "type" to type)
+        suspend fun read(source: SearchBackend): SearchPage {
+            val raw = if (source == SearchBackend.NATIVE) requireNotNull(api.netease).request("GET", "ncm/search", query, null,
+                expectedRevision = revision)
+            else api.request("GET", "ncm/search", query, expectedSession = owner, projectOnly = true,
+                callTimeoutMillis = if (type == "lyric") 20_000 else 8_000)
+            if (owner != api.publicSession()) throw ApiException(ErrorKind.Unauthorized)
+            val code = (raw as? JsonObject)?.get("code")?.jsonPrimitive?.intOrNull
+            if (code != null && code != 200) throw ApiException(ErrorKind.Server, code)
+            val dto = api.decode<SearchDto>(raw)
+            val supplements = if (type == "song" && offset == 0) dto.catalogSongs else emptyList()
+            return SearchPage((supplements + dto.songs).map(SongDto::toDomain).distinctBy(Song::id),
+                dto.totals.song, dto.hasMore.song,
+                if (type == "lyric") dto.songs.mapNotNull { song -> searchLyricContextOf(song)?.let { song.id to it } }.toMap() else emptyMap(),
+                upstreamCount = dto.songs.size, backend = source)
+        }
+        // Pin the transport after the first page: offsets from two search indexes cannot be mixed.
+        if (backend != null) return@appResult read(backend)
+        when (val result = appResult { read(SearchBackend.PROJECT) }) {
+            is AppResult.Success -> result.value
+            is AppResult.Failure -> if (offset == 0 && api.netease != null && result.kind in setOf(
+                    ErrorKind.NotFound, ErrorKind.Network, ErrorKind.Timeout, ErrorKind.Server)) read(SearchBackend.NATIVE)
+                else throw ApiException(result.kind, result.status, result.message)
+        }
+    }
+    /** Matching sources are explicit: the media-source setting never reroutes this search. */
+    suspend fun searchForLyricsMatching(keyword: String, source: LyricsSource): AppResult<SearchPage> = appResult {
+        require(source != LyricsSource.AUTO) { "自动择优需要选择器处理，请指定具体歌词来源" }
+        val query = keyword.trim().split(Regex("\\s+-\\s+"), limit = 3).take(2).joinToString(" ")
+            .replace(Regex("\\s+"), " ").trim().take(200)
+        if (query.isBlank()) throw ApiException(ErrorKind.Parse, userMessage = "请输入歌名或歌手")
+        val gateway = if (source == LyricsSource.NETEASE) api.netease
+            ?: throw ApiException(ErrorKind.NotFound, userMessage = "网易云原生歌词接口未启用") else null
+        val nativeRevision = gateway?.sessions?.state?.value?.revision
+        withTimeoutOrNull(LYRICS_MATCH_SEARCH_TIMEOUT_MS) {
+            val parameters = mapOf("keywords" to query, "offset" to "0", "limit" to "30", "type" to "song")
+            val raw = if (gateway != null) gateway.request("GET", "ncm/search", parameters, null,
+                expectedRevision = nativeRevision)
+            else api.request("GET", "ncm/search", parameters, projectOnly = true,
+                callTimeoutMillis = LYRICS_MATCH_SEARCH_TIMEOUT_MS)
+            val code = (raw as? JsonObject)?.get("code")?.jsonPrimitive?.intOrNull
+            if (code != null && code != 200) throw ApiException(ErrorKind.Server, code)
+            val result = api.decode<SearchDto>(raw)
+            SearchPage(result.songs.map(SongDto::toDomain), result.totals.song, result.hasMore.song)
+        } ?: throw ApiException(ErrorKind.Timeout)
+    }
+
+    /** Read the selected source directly, without allowing an implicit project/native fallback. */
+    suspend fun lyricsForMatching(id: Long, source: LyricsSource): AppResult<LyricsDocument> = appResult {
+        require(source != LyricsSource.AUTO) { "自动择优需要选择器处理，请指定具体歌词来源" }
+        if (id <= 0) throw ApiException(ErrorKind.NotFound)
+        val gateway = if (source == LyricsSource.NETEASE) api.netease
+            ?: throw ApiException(ErrorKind.NotFound, userMessage = "网易云原生歌词接口未启用") else null
+        val nativeRevision = gateway?.sessions?.state?.value?.revision
+        withTimeoutOrNull(LYRICS_MATCH_LOAD_TIMEOUT_MS) {
+            suspend fun read(path: String): LyricsDocument {
+                val parameters = mapOf("id" to "$id")
+                val raw = if (gateway != null) gateway.request("GET", path, parameters, null,
+                    expectedRevision = nativeRevision)
+                else api.request("GET", path, parameters, projectOnly = true,
+                    callTimeoutMillis = LYRICS_MATCH_LOAD_TIMEOUT_MS)
+                return parseDocument(raw as? JsonObject ?: throw ApiException(ErrorKind.Parse))
+            }
+            // The project can provide normalized real LDDC timing. Native NetEase reads only
+            // its official YRC/LRC endpoints and never asks the project for an estimated axis.
+            if (source == LyricsSource.CURRENT_MUSIC) {
+                val normalized = appResult { read("ncm/lyric") }
+                if (normalized is AppResult.Success && normalized.value.lines.isNotEmpty())
+                    return@withTimeoutOrNull normalized.value
+            }
+            val enhanced = appResult { read("ncm/lyric/new") }
+            if (enhanced is AppResult.Success && enhanced.value.lines.isNotEmpty()) enhanced.value
+            else if (source == LyricsSource.NETEASE) read("ncm/lyric")
+            else when (enhanced) {
+                is AppResult.Failure -> throw ApiException(enhanced.kind, enhanced.status, enhanced.message)
+                is AppResult.Success -> throw ApiException(ErrorKind.NotFound, userMessage = "这个来源没有提供歌词")
+            }
+        } ?: throw ApiException(ErrorKind.Timeout)
+    }
+    suspend fun searchLyrics(keyword: String, offset: Int = 0, backend: SearchBackend? = null): AppResult<SearchPage> =
+        searchPage(keyword, offset, "lyric", backend)
+    suspend fun searchSuggestions(keyword: String): AppResult<List<String>> = appResult {
+        val raw = api.request("GET", "ncm/search/suggest", mapOf("keywords" to keyword, "type" to "mobile"),
+            callTimeoutMillis = 5000).jsonObject
+        if (raw["code"]?.jsonPrimitive?.intOrNull?.let { it != 200 } == true) throw ApiException(ErrorKind.Server)
+        val result = raw["result"] as? JsonObject ?: raw
+        (result["allMatch"] as? JsonArray).orEmpty().mapNotNull {
+            (it as? JsonObject)?.get("keyword")?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
+        }.distinct().take(8)
+    }
+    suspend fun detail(id: Long): Song = api.get<SongDetailDto>("ncm/song/detail", mapOf("ids" to "$id")).songs.first().toDomain()
+    suspend fun details(ids: List<Long>): List<Song> = ids.distinct().chunked(200).flatMap { batch ->
+        api.get<SongDetailDto>("ncm/song/detail", mapOf("ids" to batch.joinToString(","))).songs.map(SongDto::toDomain)
+    }
+    suspend fun lyrics(id: Long): AppResult<List<LyricLine>> = appResult {
+        parseDocument(api.get<JsonObject>("ncm/lyric", mapOf("id" to "$id"))).lines.map {
+            LyricLine(it.startTimeMs, it.text, it.translation)
+        }
+    }
+    suspend fun lyricsDocument(id: Long, source: LyricsSource = LyricsSource.NETEASE, expectedServer: String? = null) = appResult {
+        require(source != LyricsSource.AUTO) { "自动择优需要选择器处理，请指定具体歌词来源" }
+        suspend fun read(path: String): io.github.currencortex.music.feature.lyrics.model.LyricsDocument =
+            parseDocument(api.decode(api.request("GET", path, mapOf("id" to "$id"),
+                expectedSession = expectedServer?.let { RequestSession(it, null) },
+                projectOnly = source == LyricsSource.CURRENT_MUSIC)))
+        // Prom's normalized endpoint adds LDDC real timing. The parser still
+        // discards wSynth estimates. Native selection never calls this server route.
+        if (source == LyricsSource.CURRENT_MUSIC) {
+            val normalized = appResult { read("ncm/lyric") }
+            if (normalized is AppResult.Success && normalized.value.lines.isNotEmpty()) return@appResult normalized.value
+        }
+        val enhanced = appResult {
+            read("ncm/lyric/new")
+        }
+        // Native /song/lyric/v1 includes LRC for songs without YRC. Keep that
+        // instead of requesting a server-generated approximation of word timing.
+        if (enhanced is AppResult.Success && enhanced.value.lines.isNotEmpty()) enhanced.value
+        else if (source == LyricsSource.CURRENT_MUSIC) throw ApiException(ErrorKind.Server)
+        else read("ncm/lyric")
+    }
+    suspend fun source(id: Long, quality: AudioQuality, session: RequestSession? = null, refresh: Boolean = false): AudioSource {
+        val access = audioAccess()
+        if (access.provider == AudioProvider.LX) return lxSource(Song(id, ""), quality, access)
+        if (access.provider == AudioProvider.LEIZ) {
+            val source = leiz.source(id, quality, access.key)
+            if (audioAccess().identity != access.identity) throw ApiException(ErrorKind.AudioSourceChanged)
+            return source
+        }
+        val query = buildMap {
+            put("id", "$id"); put("level", quality.value)
+            if (refresh && access.provider == AudioProvider.CURRENT_MUSIC) put("refresh", "1")
+        }
+        val dto = if (access.provider == AudioProvider.NETEASE) {
+            val gateway = api.netease ?: throw ApiException(ErrorKind.NotFound)
+            ApiJson.decodeFromJsonElement<SongUrlDto>(gateway.request("GET", "ncm/song/url", query, null,
+                expectedRevision = session?.neteaseRevision))
+        } else if (session == null) api.get<SongUrlDto>("ncm/song/url", query, authenticated = true)
+            else ApiJson.decodeFromJsonElement<SongUrlDto>(api.request("GET", "ncm/song/url", query,
+                authenticated = true, expectedSession = session))
+        val url = dto.url?.toHttpUrlOrNull() ?: throw ApiException(ErrorKind.NotFound)
+        if (audioAccess().identity != access.identity) throw ApiException(ErrorKind.AudioSourceChanged)
+        // Both sources report expi. Bound reuse to five minutes when a server omits it.
+        return AudioSource(url.toString(), dto.level, maxOf(dto.sr, dto.sampleRate), maxOf(dto.ch, dto.channelCount), dto.type, dto.md5,
+            validForSeconds = dto.expi.takeIf { it > 0 } ?: if (dto.level == "matched" || dto.source == "netease-match") 120 else 300,
+            source = dto.source, requestedLevel = dto.requestedLevel, matchSource = dto.matchSource,
+            bitrate = dto.br, bits = dto.bits, size = dto.size, durationMs = dto.durationMs, expectedDurationMs = dto.expectedDurationMs)
+    }
+}
+
+private const val LYRICS_MATCH_SEARCH_TIMEOUT_MS = 3_500L
+private const val LYRICS_MATCH_LOAD_TIMEOUT_MS = 5_000L
+
+/** Upstream highlights are display text, never rendered as markup. */
+internal fun cleanSearchLyric(value: String): String = value.replace(Regex("<[^>]*>"), "")
+    .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    .replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ")
+    .replace(Regex("\\s+"), " ").trim().take(240)
+
+/** Gateway joins the hit with one neighbour line on each side; markers survive until this split. */
+internal fun parseSearchLyricContext(value: String): SearchLyricContext? {
+    val parts = value.split('\n').mapNotNull { raw ->
+        val hit = raw.contains("<b>", true) || raw.contains("<em>", true)
+        cleanSearchLyric(raw).takeIf(String::isNotBlank)?.let { it to hit }
+    }
+    if (parts.isEmpty()) return null
+    val hitIndex = parts.indexOfLast { it.second }
+    if (hitIndex < 0) return SearchLyricContext(null, parts.joinToString(" · ") { it.first }, null)
+    return SearchLyricContext(parts.take(hitIndex).lastOrNull()?.first,
+        parts.filter { it.second }.joinToString(" · ") { it.first },
+        parts.drop(hitIndex + 1).firstOrNull()?.first)
+}
+
+/** Prom servers now ship structured context rows; older deployments only carry the joined string. */
+internal fun searchLyricContextOf(dto: SongDto): SearchLyricContext? {
+    val context = dto.lyricContext
+    if (dto.lyricContextStatus != null && context.isEmpty()) return SearchLyricContext(null,
+        cleanSearchLyric(dto.lyricMatch), null, dto.lyricContextStatus, dto.lyricContextRetryable)
+    if (context.isEmpty()) return parseSearchLyricContext(dto.lyric)
+    val firstHit = context.indexOfFirst { it.matched }
+    val lastHit = context.indexOfLast { it.matched }
+    val matched = (if (firstHit >= 0) context.filter { it.matched }.joinToString(" · ") { it.txt }
+        else context.joinToString(" · ") { it.txt }).let(::cleanSearchLyric)
+    if (matched.isBlank()) return null
+    val before = if (firstHit > 0) cleanSearchLyric(context[firstHit - 1].txt).takeIf(String::isNotBlank) else null
+    val after = if (lastHit >= 0 && lastHit < context.lastIndex) cleanSearchLyric(context[lastHit + 1].txt).takeIf(String::isNotBlank) else null
+    return SearchLyricContext(before, matched, after, dto.lyricContextStatus, dto.lyricContextRetryable)
+}

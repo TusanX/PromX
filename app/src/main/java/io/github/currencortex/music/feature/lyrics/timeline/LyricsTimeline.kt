@@ -1,0 +1,20 @@
+package io.github.currencortex.music.feature.lyrics.timeline
+
+import io.github.currencortex.music.feature.lyrics.model.LyricsDocument
+
+class LyricsTimeline(private val document: LyricsDocument) {
+    private val synchronizer = io.github.currencortex.music.feature.lyrics.domain.LyricsSynchronizer(document)
+    /** -1 in instrumental gaps; end time is meaningful for TTML and YRC. */
+    fun lineAt(positionMs: Long): Int = synchronizer.findCurrentLine(positionMs)
+}
+
+/** Monotonic UI interpolation only; Media3 remains the authoritative clock. */
+data class PlaybackAnchor(val positionMs: Long, val realtimeMs: Long, val playing: Boolean,
+    val durationMs: Long = 0, val speed: Float = 1f, val revision: Long = 0) {
+    internal companion object { const val MAX_EXTRAPOLATION_MS = 3000L }
+    fun positionAt(nowMs: Long): Long {
+        // Keep short gaps smooth without extrapolating indefinitely from stale anchors.
+        val elapsed = if (playing) ((nowMs - realtimeMs).coerceIn(0, MAX_EXTRAPOLATION_MS) * speed).toLong() else 0
+        return (positionMs + elapsed).coerceIn(0, durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
+    }
+}
