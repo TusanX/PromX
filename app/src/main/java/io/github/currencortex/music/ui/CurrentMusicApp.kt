@@ -744,6 +744,8 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                                     container, ::navigateBack, onLogin = { navigateLibrary("user/binding") },
                                     onNavigate = ::navigateLibrary, onPlay = { song -> playWithPermission { container.playerController.playSong(song) } },
                                     onPlayList = { songs,index -> playWithPermission { container.playerController.playList(songs,index) } })
+                                route == "user/qq-listening" -> io.github.currencortex.music.feature.listening.QqListeningReportScreen(
+                                    container, ::navigateBack, onLogin = { navigateLibrary("qq/login") })
                                 route == "user/decorations" -> {
                                     val vm: DecorationViewModel = viewModel(key = route, factory = viewModelFactory { DecorationViewModel(container) })
                                     DecorationScreen(vm, ::navigateBack)

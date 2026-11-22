@@ -15,6 +15,11 @@ object QqLibrary {
         val writable get() = dirId in 1..199 && dirType == 0
     }
     data class PlaylistDetail(val id: Long, val title: String, val cover: String, val count: Int, val tracks: List<Track>)
+    data class ListeningMonth(val month: Int, val count: Long)
+    data class ListeningCard(val key: String, val title: String, val value: String,
+        val summary: String, val image: String)
+    data class ListeningReport(val nickname: String, val avatar: String, val signature: String,
+        val months: List<ListeningMonth>, val cards: List<ListeningCard>, val description: String)
     data class Track(
         val mid: String,
         val name: String,
@@ -113,6 +118,63 @@ object QqLibrary {
             "我喜欢：${likedTracks ?: 0} 首",
         ).joinToString("\n")
     }
+
+    /** QQ 音乐“音乐基因/听歌报告”，公开页使用脱敏加密账号也能读取。 */
+    fun listeningReport(cookies: Map<String, String>, uin: String): ListeningReport? = runCatching {
+        if (uin.isBlank()) return null
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val encryptedUin = runCatching {
+            val body = get("https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss" +
+                "?hostuin=$uin&sin=0&size=1&format=json", cookie)
+            parse(body)?.get("data")?.jsonObject?.get("encrypt_uin")?.jsonPrimitive?.contentOrNull
+        }.getOrNull().orEmpty().ifBlank {
+            cookies["encrypt_uin"] ?: cookies["qqmusic_euin"] ?: return null
+        }
+        val data = musicuData(
+            "music.recommend.UserProfileSettingSvr",
+            "GetProfileReport",
+            buildJsonObject { put("VisitAccount", encryptedUin) },
+            cookie,
+            uin,
+        ) ?: return null
+        val user = data["UserInfoCard"]?.jsonObject
+        val report = data["ListeningReport"]?.jsonObject
+        val months = report?.get("Report")?.jsonArray.orEmpty().mapNotNull { item ->
+            val month = item.jsonObject["Month"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            ListeningMonth(month, item.jsonObject["Num"]?.jsonPrimitive?.longOrNull ?: 0L)
+        }
+        fun cardFrom(base: JsonObject?, key: String): ListeningCard? {
+            if (base == null) return null
+            val value = base["TypeTitle"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (value.isBlank()) return null
+            return ListeningCard(
+                key = key,
+                title = base["KeyWord"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                value = value,
+                summary = base["Slogan"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                image = base["Pic"]?.jsonPrimitive?.contentOrNull.orEmpty().replace("http://", "https://"),
+            )
+        }
+        val cards = listOf("Singers", "Ages", "Genres", "BPM", "Grooving", "Personality",
+            "TimePreference", "CharacterColor").flatMap { key ->
+            when (val value = data[key]) {
+                is JsonArray -> value.mapNotNull { item -> cardFrom(item.jsonObject["Base"]?.jsonObject, key) }
+                is JsonObject -> listOfNotNull(cardFrom(value["Base"]?.jsonObject, key))
+                else -> emptyList()
+            }
+        }.distinctBy { it.key to it.value }.take(9)
+        val description = data["MainDescription"]?.jsonObject?.get("Description")
+            ?.jsonPrimitive?.contentOrNull.orEmpty()
+        if (months.isEmpty() && cards.isEmpty()) return null
+        ListeningReport(
+            nickname = user?.get("NickName")?.jsonPrimitive?.contentOrNull.orEmpty(),
+            avatar = user?.get("HeadUrl")?.jsonPrimitive?.contentOrNull.orEmpty().replace("http://", "https://"),
+            signature = user?.get("Signature")?.jsonPrimitive?.contentOrNull.orEmpty(),
+            months = months,
+            cards = cards,
+            description = description,
+        )
+    }.getOrNull()
 
     /** 当前账号自建歌单。GetPlaylistByUin 同时提供 tid 和 dirId，写「我喜欢」时不会再猜目录号。 */
     fun ownedPlaylists(uin: String, cookie: String): List<Folder> = runCatching {
@@ -236,7 +298,7 @@ object QqLibrary {
     fun isLiked(mid: String, cookie: String, uin: String): Boolean? =
         likedMids(listOf(mid), cookie, uin)[mid]
 
-    /** 当前 musicu 写入协议：数字 songId 写入 dirId=201，再用 songmid 读回确认。 */
+    /** 数字 songId 写入「我喜欢」，写入后按 songmid 读取确认。 */
     fun setLiked(songId: Long, mid: String, liked: Boolean,
         cookies: Map<String, String>, uin: String): Boolean = runCatching {
         require(songId > 0)
@@ -250,12 +312,17 @@ object QqLibrary {
         )?.get("track_info")?.jsonObject ?: return false
         if (detail["id"]?.jsonPrimitive?.longOrNull != songId ||
             detail["mid"]?.jsonPrimitive?.contentOrNull != mid) return false
+        val folder = ownedPlaylists(uin, cookie).firstOrNull(::isLikedFolder)
+        val dirId = folder?.dirId?.takeIf { it > 0 } ?: 201L
+        val tid = folder?.id?.takeIf { it > 0 } ?: 0L
         if (isLiked(mid, cookie, uin) == liked) return true
         val data = musicuData(
             "music.musicasset.PlaylistDetailWrite",
             if (liked) "AddSonglist" else "DelSonglist",
             buildJsonObject {
-                put("dirId", 201)
+                put("dirId", dirId)
+                put("tid", tid)
+                put("bFmtUtf8", true)
                 putJsonArray("v_songInfo") {
                     addJsonObject {
                         put("songId", songId)
@@ -267,7 +334,13 @@ object QqLibrary {
             uin,
         ) ?: return false
         if (data["retCode"]?.jsonPrimitive?.intOrNull?.let { it != 0 } != false) return false
-        isLiked(mid, cookie, uin) == liked
+        repeat(3) { attempt ->
+            val confirmed = isLiked(mid, cookie, uin)
+            if (confirmed == liked) return true
+            if (confirmed == null && attempt == 2) return true
+            if (attempt < 2) Thread.sleep(250)
+        }
+        false
     }.getOrDefault(false)
 
     /** 当前网页版歌单详情接口。旧 fcg_ucc_getcdinfo_byids_cp 已返回 4000。 */

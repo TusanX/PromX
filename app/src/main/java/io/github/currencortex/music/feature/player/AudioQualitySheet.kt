@@ -45,7 +45,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable internal fun AudioQualitySheet(selected: AudioQuality, onSelect: (AudioQuality) -> Unit,
     onDismiss: () -> Unit, enabled: Boolean = true, title: String = "当前歌曲音质", onNetwork: (() -> Unit)? = null,
     song: Song? = null, insights: SongInsightsRepository? = null,
-    audioInfo: io.github.currencortex.music.core.media.AudioStreamInfo? = null, onRefresh: (() -> Unit)? = null) {
+    audioInfo: io.github.currencortex.music.core.media.AudioStreamInfo? = null, onRefresh: (() -> Unit)? = null,
+    source: MusicSource = MusicSource.NETEASE) {
     var visible by remember { mutableStateOf(true) }
     var afterDismiss by remember { mutableStateOf<(() -> Unit)?>(null) }
     val dismiss by rememberUpdatedState(onDismiss)
@@ -58,7 +59,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                 if (quality != selected) onSelect(quality)
                 visible = false
             }
-        }, enabled, onNetwork?.let { action -> { afterDismiss = action; visible = false } }, extraContent = {
+        }, enabled, onNetwork?.let { action -> { afterDismiss = action; visible = false } }, source = source,
+        extraContent = {
             audioInfo?.let { info ->
                 Text("实际播放 · ${info.summary}", Modifier.padding(4.dp).testTag("actual_audio_source"), fontSize = 13.sp)
                 if (info.matched) Text("官方音源暂不可用，正在播放匹配音源。音质与版本以实际文件为准。",
@@ -73,8 +75,12 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable internal fun AudioQualityChoices(selected: AudioQuality, onSelect: (AudioQuality) -> Unit,
     enabled: Boolean = true, onNetwork: (() -> Unit)? = null, modifier: Modifier = Modifier,
-    extraContent: @Composable () -> Unit = {}) {
+    source: MusicSource = MusicSource.NETEASE, extraContent: @Composable () -> Unit = {}) {
     val colors = MiuixTheme.colorScheme
+    val qq = source == MusicSource.QQ_MUSIC
+    val regular = if (qq) listOf(AudioQuality.STANDARD, AudioQuality.HIGHER,
+        AudioQuality.EXHIGH, AudioQuality.LOSSLESS)
+    else AudioQuality.entries.filter { it !in setOf(AudioQuality.AUTO, AudioQuality.SKY, AudioQuality.JYMASTER) }
     // This is a fixed, short list. Compose it before the native entrance starts instead of
     // subcomposing every text row during the first animated layout pass.
     // Let the native sheet supply the available screen height. Keep the safe-area spacing
@@ -84,24 +90,28 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         run {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("已选 · ${selected.label}", Modifier.weight(1f), fontSize = 13.sp, color = colors.onSurfaceVariantSummary)
+                Text("已选 · ${qualityLabelFor(source, selected)}", Modifier.weight(1f), fontSize = 13.sp,
+                    color = colors.onSurfaceVariantSummary)
                 onNetwork?.let { action -> Text("网络与播放 ›", Modifier.heightIn(min = 48.dp).testTag("quality_network_settings")
                     .clickable(role = Role.Button, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = action)
                     .padding(horizontal = 8.dp, vertical = 14.dp), fontSize = 12.sp, color = colors.primary) }
             }
         }
-        run {
+        if (!qq) run {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FeaturedQuality(AudioQuality.SKY, selected, enabled, onSelect, Modifier.weight(1f))
                 FeaturedQuality(AudioQuality.JYMASTER, selected, enabled, onSelect, Modifier.weight(1f))
             }
         }
-        AudioQuality.entries.filter { it !in setOf(AudioQuality.AUTO, AudioQuality.SKY, AudioQuality.JYMASTER) }.forEach { quality ->
-            QualityRow(quality, selected, enabled, onSelect)
+        regular.forEach { quality ->
+            QualityRow(quality, selected, enabled, onSelect,
+                qualityLabelFor(source, quality), qualityDescriptionFor(source, quality))
         }
-        QualityRow(AudioQuality.AUTO, selected, enabled, onSelect)
+        QualityRow(AudioQuality.AUTO, selected, enabled, onSelect,
+            qualityLabelFor(source, AudioQuality.AUTO), qualityDescriptionFor(source, AudioQuality.AUTO))
         run {
-            Text(if (enabled) "按所选档位请求音源，实际音质取决于歌曲、音源及账号权限。自动最高会优先请求可用高音质。"
+            Text(if (enabled && qq) "档位名称按 QQ 音乐显示。会员曲仍取决于账号、地区和歌曲版权。"
+                else if (enabled) "按所选档位请求音源，实际音质取决于歌曲、音源及账号权限。自动最高会优先请求可用高音质。"
                 else "请先退出一起听，再切换音质。",
                 Modifier.padding(horizontal = 4.dp, vertical = 8.dp).testTag("quality_note"),
                 fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
@@ -161,7 +171,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     }
 }
 
-@Composable private fun QualityRow(quality: AudioQuality, selected: AudioQuality, enabled: Boolean, onSelect: (AudioQuality) -> Unit) {
+@Composable private fun QualityRow(quality: AudioQuality, selected: AudioQuality, enabled: Boolean,
+    onSelect: (AudioQuality) -> Unit, label: String = quality.label,
+    description: String = quality.description()) {
     val colors = MiuixTheme.colorScheme
     val active = quality == selected
     Row(Modifier.fillMaxWidth().qualityClick(quality, active, enabled) { onSelect(quality) }
@@ -171,12 +183,32 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             Text(quality.shortName(), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.primary)
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(quality.label, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colors.onSurface)
-            Text(quality.description(), fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
+            Text(label, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colors.onSurface)
+            Text(description, fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
         }
         QualityCheck(active)
     }
 }
+
+internal fun qualityLabelFor(source: MusicSource, quality: AudioQuality): String =
+    if (source != MusicSource.QQ_MUSIC) quality.label else when (quality) {
+        AudioQuality.AUTO -> "自动最佳"
+        AudioQuality.STANDARD -> "流畅"
+        AudioQuality.HIGHER -> "标准"
+        AudioQuality.EXHIGH -> "高品质"
+        AudioQuality.LOSSLESS -> "无损"
+        else -> quality.label
+    }
+
+private fun qualityDescriptionFor(source: MusicSource, quality: AudioQuality): String =
+    if (source != MusicSource.QQ_MUSIC) quality.description() else when (quality) {
+        AudioQuality.AUTO -> "按账号权限选择当前可用的最高档位"
+        AudioQuality.STANDARD -> "流畅 AAC，优先节省流量"
+        AudioQuality.HIGHER -> "标准 MP3，适合日常播放"
+        AudioQuality.EXHIGH -> "高品质 320K MP3"
+        AudioQuality.LOSSLESS -> "无损 FLAC，需歌曲与账号支持"
+        else -> "QQ 音乐音质档位"
+    }
 
 @Composable private fun Modifier.qualityClick(quality: AudioQuality, active: Boolean, enabled: Boolean, onClick: () -> Unit): Modifier {
     val interaction = remember { MutableInteractionSource() }

@@ -97,6 +97,9 @@ import kotlin.math.roundToInt
             "lyrics_translation", if (classic) "只显示正在播放的歌词翻译" else "显示每句歌词的翻译，与原文一起滚动")
         LyricsToggle("罗马音", display.romanization, { value -> onDisplay { it.copy(romanization = value) } },
             "lyrics_romanization", if (classic) "只显示正在播放的歌词罗马音" else "显示歌词提供的逐词音译、注音或整行罗马音")
+        LyricsToggle("沉浸罗马音", display.immersiveRomanization,
+            { value -> onDisplay { it.copy(immersiveRomanization = value) } },
+            "lyrics_immersive_romanization", "主字幕改为罗马音并保留逐字动画，翻译仍然正常显示")
         LyricsToggle("逐字动画", display.wordAnimation, { value -> onDisplay { it.copy(wordAnimation = value) } }, "lyrics_word_animation")
         if (display.wordAnimation) LyricsToggle("逐字上提", display.wordLift, { value -> onDisplay { it.copy(wordLift = value) } },
             "lyrics_word_lift", "唱到的字轻轻上提，唱过后保持抬高")

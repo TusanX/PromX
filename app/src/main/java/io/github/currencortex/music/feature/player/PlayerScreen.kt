@@ -524,7 +524,7 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                             PlayerTransport(vm, onToggle, quality = {
                                 Text(
                                     if (state.song?.privateLibrary == true) state.song?.originalQualityLabel.orEmpty()
-                                    else state.audioInfo?.label ?: settings.quality.label,
+                                    else state.audioInfo?.label ?: qualityLabelFor(settings.primarySource, settings.quality),
                                     Modifier.testTag("open_quality_sheet")
                                         .clickable(
                                             enabled = state.mode == PlayerMode.LOCAL && state.song?.privateLibrary != true,
@@ -622,7 +622,8 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
             }
             PlayerOverlay.QUALITY -> AudioQualitySheet(settings.quality, vm::quality, dismiss, state.mode == PlayerMode.LOCAL,
                 onNetwork = onNetwork, song = queue.current, insights = vm.container.musicRepository.insights,
-                audioInfo = state.audioInfo, onRefresh = if (state.mode == PlayerMode.LOCAL && state.song?.musicSource == io.github.currencortex.music.data.song.MusicSource.NETEASE && !state.resolving)
+                audioInfo = state.audioInfo, source = settings.primarySource,
+                onRefresh = if (state.mode == PlayerMode.LOCAL && state.song?.musicSource == io.github.currencortex.music.data.song.MusicSource.NETEASE && !state.resolving)
                     ({ vm.container.playerController.refreshSource() }) else null)
             PlayerOverlay.ACTIONS -> if (queue.current != null) MusicChoiceDialog("歌曲操作", dismiss) { actions?.invoke(queue.current!!) }
             PlayerOverlay.OPTIONS -> MusicChoiceDialog("播放与歌词", dismiss) {

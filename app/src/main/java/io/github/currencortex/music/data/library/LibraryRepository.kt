@@ -374,7 +374,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
     private suspend fun changeLike(song: Song, desired: Boolean?): AppResult<Unit> = mutationMutex.withLock {
         // QQ 音乐：收藏 = 写入「我喜欢」歌单（dirid 201）
         if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
-            val qq = qqSession?.invoke() ?: return@withLock AppResult.Failure(ErrorKind.Unauthorized)
+            val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+                ?: return@withLock AppResult.Failure(ErrorKind.Unauthorized)
             val mid = song.externalIds.qqMusicId ?: return@withLock AppResult.Failure(ErrorKind.NotFound)
             val numericId = song.externalIds.qqNumericId?.toLongOrNull()
                 ?: return@withLock AppResult.Failure(ErrorKind.NotFound)

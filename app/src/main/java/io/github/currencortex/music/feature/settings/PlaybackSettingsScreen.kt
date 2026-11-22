@@ -35,7 +35,8 @@ import kotlin.math.roundToInt
     val modes = mapOf(MusicTransitionMode.OFF to "关闭", MusicTransitionMode.SMART to "智能过渡", MusicTransitionMode.CROSSFADE to "淡入淡出")
     SettingsPage("播放", "playback_settings") {
         item("quality") { SettingsSection("音质", MusicIcons.Headphones) {
-            MusicDestinationRow("默认音质", { qualityOpen = true }, Modifier.testTag("default_quality"), summary = settings.quality.label)
+            MusicDestinationRow("默认音质", { qualityOpen = true }, Modifier.testTag("default_quality"),
+                summary = io.github.currencortex.music.feature.player.qualityLabelFor(settings.primarySource, settings.quality))
         } }
         item("listening") { SettingsSection("听歌足迹", MusicIcons.Headphones) {
             Column(Modifier.testTag("listening_source_setting").semantics { selectableGroup() }) {
@@ -123,7 +124,7 @@ import kotlin.math.roundToInt
         } }
     }
     if (qualityOpen) io.github.currencortex.music.feature.player.AudioQualitySheet(settings.quality, vm::quality,
-        { qualityOpen = false }, title = "默认播放音质")
+        { qualityOpen = false }, title = "默认播放音质", source = settings.primarySource)
     if (appleLyricsOpen) MusicDialog("Apple Music 歌词", { appleLyricsOpen = false }) {
         Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())
             .testTag("apple_lyrics_settings")) {

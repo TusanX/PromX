@@ -220,8 +220,9 @@ object AltSources {
             io.github.currencortex.music.core.media.AudioQuality.STANDARD ->
                 listOf("C400" to "m4a", "M500" to "mp3")
             io.github.currencortex.music.core.media.AudioQuality.HIGHER ->
-                listOf("M500" to "mp3", "M800" to "mp3")
-            io.github.currencortex.music.core.media.AudioQuality.EXHIGH,
+                listOf("M500" to "mp3", "C400" to "m4a")
+            io.github.currencortex.music.core.media.AudioQuality.EXHIGH ->
+                listOf("M800" to "mp3", "M500" to "mp3")
             io.github.currencortex.music.core.media.AudioQuality.JYEFFECT ->
                 listOf("M800" to "mp3", "F000" to "flac")
             io.github.currencortex.music.core.media.AudioQuality.LOSSLESS,
@@ -240,12 +241,58 @@ object AltSources {
             .firstOrNull { it.startsWith("qm_keyst=") || it.startsWith("qqmusic_key=") }
             ?.substringAfter('=')
             .orEmpty()
-        val body = buildJsonObject {
+        val effectiveUin = uin.ifBlank { "0" }
+        val gtk = if (authst.isNotBlank()) QqAuth.gTk(authst) else 5381L
+        val mediaFiles = formats.map { (prefix, extension) ->
+            "$prefix$effectiveMediaId.$extension"
+        }
+        val combinedFiles = formats.map { (prefix, extension) ->
+            "$prefix$songmid$effectiveMediaId.$extension"
+        }
+        val requestFiles = formats.indices.flatMap { index ->
+            listOf(mediaFiles[index], combinedFiles[index])
+        }
+        val requestUrl = "https://u.y.qq.com/cgi-bin/musicu.fcg?-=getplaysongvkey&g_tk=$gtk" +
+            "&loginUin=$effectiveUin&hostUin=0&format=json&platform=yqq.json&needNewCode=0"
+
+        // Current YQQ protocol.  The filename normally uses media_mid alone; the combined
+        // form is kept as a fallback because older catalog entries still rely on it.
+        val modernBody = buildJsonObject {
             putJsonObject("comm") {
-                put("uin", uin)
+                put("uin", effectiveUin.toLongOrNull() ?: 0L)
+                put("format", "json")
+                put("ct", 24)
+                put("cv", 4747474)
+                put("platform", "yqq.json")
+                put("g_tk", gtk)
+                put("tmeLoginType", 2)
+                if (authst.isNotBlank()) put("authst", authst)
+            }
+            putJsonObject("req_0") {
+                put("module", "music.vkey.GetVkey")
+                put("method", "UrlGetVkey")
+                putJsonObject("param") {
+                    put("guid", guid)
+                    putJsonArray("songmid") { add(songmid) }
+                    putJsonArray("songtype") { add(0) }
+                    put("uin", effectiveUin)
+                    put("loginflag", 1)
+                    put("platform", "20")
+                    put("ctx", 0)
+                    putJsonArray("filename") { requestFiles.forEach(::add) }
+                }
+            }
+        }.toString()
+        val modern = postWithCookie(requestUrl, "https://y.qq.com/", modernBody, cookie)
+        if (runCatching { playableFromVkey(modern) }.getOrNull() != null) return modern
+
+        val legacyBody = buildJsonObject {
+            putJsonObject("comm") {
+                put("uin", effectiveUin)
                 put("format", "json")
                 put("ct", 24)
                 put("cv", 0)
+                put("g_tk", gtk)
                 if (authst.isNotBlank()) put("authst", authst)
             }
             putJsonObject("req_0") {
@@ -255,16 +302,14 @@ object AltSources {
                     put("guid", guid)
                     putJsonArray("songmid") { add(songmid) }
                     putJsonArray("songtype") { add(0) }
-                    put("uin", uin)
+                    put("uin", effectiveUin)
                     put("loginflag", 1)
                     put("platform", "20")
                     putJsonArray("filename") { files.forEach(::add) }
                 }
             }
         }.toString()
-        val url = "https://u.y.qq.com/cgi-bin/musicu.fcg?-=getplaysongvkey&g_tk=5381" +
-            "&loginUin=$uin&hostUin=0&format=json&platform=yqq.json&needNewCode=0"
-        return postWithCookie(url, "https://y.qq.com/", body, cookie)
+        return postWithCookie(requestUrl, "https://y.qq.com/", legacyBody, cookie)
     }
 
     private fun postWithCookie(url: String, referer: String, body: String, cookie: String): Raw {

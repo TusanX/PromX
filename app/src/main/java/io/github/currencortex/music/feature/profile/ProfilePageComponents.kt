@@ -110,9 +110,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
         ProfileDestination("歌单", "创建与收藏的歌单", MusicIcons.List, "open_playlists") { navigate("lib/playlists") }
         SettingsDivider(52.dp)
         ProfileDestination("最近播放", "回顾听过的歌曲", MusicIcons.Update, "open_recent") { navigate("lib/recent") }
-        val biliMode = container?.musicSettings?.state?.collectAsStateWithLifecycle()?.value?.primarySource ==
-            io.github.currencortex.music.data.song.MusicSource.BILIBILI
-        if (!biliMode) {
+        val sourceMode = container?.musicSettings?.state?.collectAsStateWithLifecycle()?.value?.primarySource
+        val qqMode = sourceMode == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC
+        val biliMode = sourceMode == io.github.currencortex.music.data.song.MusicSource.BILIBILI
+        if (qqMode) {
+            SettingsDivider(52.dp)
+            ProfileDestination("QQ 音乐听歌报告", "账号音乐基因、月度听歌与风格画像",
+                MusicIcons.Headphones, "open_qq_listening_report") { navigate("user/qq-listening") }
+        } else if (!biliMode) {
             SettingsDivider(52.dp)
             ProfileDestination("听歌时长", "本机与网易云听歌足迹", MusicIcons.Headphones, "open_listening") {
                 navigate("user/listening")

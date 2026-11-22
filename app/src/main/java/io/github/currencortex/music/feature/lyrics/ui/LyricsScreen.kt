@@ -80,21 +80,24 @@ private suspend fun awaitLyricsDisplayFrame(): Long = kotlinx.coroutines.suspend
     fontSize: Float = LyricsTypography.DEFAULT_SIZE, weightMode: LyricsWeight = LyricsWeight.CURRENT, lyricsOffsetMs: Long = 0,
     display: LyricsDisplayOptions = LyricsDisplayOptions(), minimal: Boolean = false, perspective: Boolean = false,
     cover: String = "", mediaDurationMs: Long = 0, playbackRunning: Boolean = true) {
+    val renderedDocument = remember(document, display.immersiveRomanization) {
+        if (display.immersiveRomanization) document.withImmersiveRomanization() else document
+    }
     if (display.style == io.github.currencortex.music.data.settings.LyricsStyle.APPLE_MUSIC) {
-        AppleMusicLyrics(document, position, onSeek, modifier, canSeek, translation, romanization,
+        AppleMusicLyrics(renderedDocument, position, onSeek, modifier, canSeek, translation, romanization,
             wordAnimation, effects, LyricsTypography.normalize(fontSize), weightMode,
             lyricsOffsetMs, display, mediaDurationMs, playbackRunning)
         return
     }
     val smokeColors = if (display.smoke || display.particles) rememberLyricsSmokeColors(cover) else null
     val size = LyricsTypography.normalize(fontSize)
-    val timeline = remember(document) { LyricsSynchronizer(document) }
+    val timeline = remember(renderedDocument) { LyricsSynchronizer(renderedDocument) }
     val effectivePosition = remember(position, lyricsOffsetMs) { derivedStateOf { LyricsSynchronizer.lyricPosition(position.value, lyricsOffsetMs) } }
     // While the reader holds a manual anchor, every highlight derives from that line, not the playing position.
-    var browseAnchor by remember(document) { mutableStateOf<Int?>(null) }
-    val visualPosition = remember(document, effectivePosition) { derivedStateOf {
+    var browseAnchor by remember(renderedDocument) { mutableStateOf<Int?>(null) }
+    val visualPosition = remember(renderedDocument, effectivePosition) { derivedStateOf {
         val anchor = browseAnchor
-        if (anchor != null && anchor in document.lines.indices) document.lines[anchor].startTimeMs + 1
+        if (anchor != null && anchor in renderedDocument.lines.indices) renderedDocument.lines[anchor].startTimeMs + 1
         else effectivePosition.value
     } }
     val activeLines by remember(timeline, visualPosition) { derivedStateOf { timeline.activeLines(visualPosition.value) } }
@@ -102,7 +105,7 @@ private suspend fun awaitLyricsDisplayFrame(): Long = kotlinx.coroutines.suspend
     val playbackTarget by remember(timeline, effectivePosition) { derivedStateOf { timeline.scrollTarget(effectivePosition.value) } }
     val interlude by remember(timeline, effectivePosition) { derivedStateOf { timeline.interlude(effectivePosition.value) } }
     if (display.smoke || display.particles) {
-        SmokeLyricsStage(document, target, effectivePosition, onSeek = {
+        SmokeLyricsStage(renderedDocument, target, effectivePosition, onSeek = {
             LyricsSynchronizer.seekPositionOrNull(it, lyricsOffsetMs, mediaDurationMs)?.let(onSeek)
         },
             modifier = modifier, canSeek = canSeek, translation = translation, romanization = romanization,
@@ -110,14 +113,14 @@ private suspend fun awaitLyricsDisplayFrame(): Long = kotlinx.coroutines.suspend
             particles = display.particles)
         return
     }
-    var followRequest by remember(document) { mutableIntStateOf(0) }
+    var followRequest by remember(renderedDocument) { mutableIntStateOf(0) }
     val browsingOffStage = remember { mutableLongStateOf(-1L) }
     Box(modifier.testTag("lyrics_panel")) {
-        MonetLyricsRail(document, target, activeLines.toSet(), Modifier.fillMaxSize(), size,
+        MonetLyricsRail(renderedDocument, target, activeLines.toSet(), Modifier.fillMaxSize(), size,
             display.centered, minimal, perspective, effects, followRequest,
             onBrowse = { browseAnchor = it },
             expandWindow = display.hideControls && !minimal, playbackTarget = playbackTarget) { index, browsing, tone, focused, focusIndex ->
-            val line = document.lines[index]
+            val line = renderedDocument.lines[index]
             // Browsing rows never self-match: bold, glow, karaoke fill and the translation slot
             // belong to the sung line alone. The selection reads through the rail tone lift only.
             LyricsLineView(line, index, if (browsing) browsingOffStage else visualPosition, focused,
