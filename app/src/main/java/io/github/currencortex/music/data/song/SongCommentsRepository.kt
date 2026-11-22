@@ -22,7 +22,8 @@ data class SongCommentsPage(val comments: List<NeteaseComment>, val total: Long,
     val nextCursor: String?, val meUid: Long)
 
 /** Local NetEase credentials stay on-device; otherwise the project uses its saved binding. */
-class SongCommentsRepository(private val api: ApiClient, private val session: () -> RequestSession) {
+class SongCommentsRepository(private val api: ApiClient, private val session: () -> RequestSession,
+    private val qqSession: (() -> io.github.currencortex.music.core.alt.QqSessionStore?)? = null) {
     private suspend fun call(method: String, path: String, query: Map<String, String> = emptyMap(), body: JsonObject? = null): JsonElement {
         val owner = session()
         val native = api.hasLocalNeteaseLogin || api.nativeMediaEnabled
@@ -76,9 +77,27 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
         val list = result.comments.map { comment ->
             NeteaseComment(0, comment.content, comment.timeSeconds * 1000, comment.likes,
                 NeteaseCommentUser(comment.nick, comment.avatar), emptyList(), comment.id,
-                0, comment.likedByMe, comment.replyCount)
+                if (comment.canDelete) 1 else 0, comment.likedByMe, comment.replyCount)
         }
-        return SongCommentsPage(list, result.total, result.more, null, 0)
+        val nextPage = if (result.more) (page + 1).toString() else null
+        return SongCommentsPage(list, result.total, result.more, nextPage, 1)
+    }
+
+    suspend fun replies(song: Song, commentId: String, cursor: String? = null): SongCommentsPage {
+        if (song.musicSource != MusicSource.QQ_MUSIC) {
+            return SongCommentsPage(emptyList(), 0, false, null, 0)
+        }
+        val page = cursor?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.QqExtras.replies(commentId, page)
+        }
+        val list = result.comments.map { comment ->
+            NeteaseComment(0, comment.content, comment.timeSeconds * 1000, comment.likes,
+                NeteaseCommentUser(comment.nick, comment.avatar), emptyList(), comment.id,
+                if (comment.canDelete) 1 else 0, comment.likedByMe, comment.replyCount)
+        }
+        return SongCommentsPage(list, result.total, result.more,
+            if (result.more) (page + 1).toString() else null, 1)
     }
 
     suspend fun comments(id: Long, sort: CommentSort, page: Int = 1, cursor: String? = null): SongCommentsPage =
@@ -107,5 +126,50 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
         call("POST", "ncm/comment", body = buildJsonObject {
             put("id", id); put("type", 0); put("t", 0); put("confirm", 1); put("commentId", commentId)
         })
+    }
+
+    suspend fun send(song: Song, content: String, replyTo: String? = null) {
+        if (song.musicSource != MusicSource.QQ_MUSIC) {
+            val id = song.externalIds.neteaseId?.toLongOrNull() ?: song.id
+            send(id, content, replyTo)
+            return
+        }
+        val numeric = song.externalIds.qqNumericId?.toLongOrNull()
+            ?: throw ApiException(ErrorKind.NotFound)
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+            ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 QQ 音乐")
+        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.QqExtras.sendComment(
+                numeric, content, replyTo, qq.cookies, qq.uin)
+        }
+        if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐评论发送失败")
+    }
+
+    suspend fun like(song: Song, commentId: String, liked: Boolean) {
+        if (song.musicSource != MusicSource.QQ_MUSIC) {
+            like(song.externalIds.neteaseId?.toLongOrNull() ?: song.id, commentId, liked)
+            return
+        }
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+            ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 QQ 音乐")
+        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.QqExtras.likeComment(
+                commentId, liked, qq.cookies, qq.uin)
+        }
+        if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐评论点赞失败")
+    }
+
+    suspend fun delete(song: Song, commentId: String) {
+        if (song.musicSource != MusicSource.QQ_MUSIC) {
+            delete(song.externalIds.neteaseId?.toLongOrNull() ?: song.id, commentId)
+            return
+        }
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+            ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 QQ 音乐")
+        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.QqExtras.deleteComment(
+                commentId, qq.cookies, qq.uin)
+        }
+        if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐评论删除失败")
     }
 }

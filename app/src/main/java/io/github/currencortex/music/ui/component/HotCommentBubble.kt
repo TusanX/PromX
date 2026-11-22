@@ -47,7 +47,10 @@ private data class HotComment(val text: String, val author: String, val likes: L
     val playing = player.playing
     var current by remember { mutableStateOf<HotComment?>(null) }
     var dismissed by remember(song?.id) { mutableStateOf(false) }
-    val repo = remember { SongCommentsRepository(container.apiClient) { container.musicSession() } }
+    val repo = remember {
+        SongCommentsRepository(container.apiClient, session = { container.musicSession() },
+            qqSession = { container.qqSession })
+    }
     val cache = remember { mutableMapOf<Long, HotComment>() }
 
     // B站/QQ 的评论不需要网易云登录，只有网易云歌曲才依赖登录态

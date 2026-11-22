@@ -295,7 +295,8 @@ object QqExtras {
     }.getOrNull()
 
     data class Comment(val id: String, val content: String, val nick: String, val avatar: String,
-        val likes: Long, val timeSeconds: Long, val likedByMe: Boolean, val replyCount: Int)
+        val likes: Long, val timeSeconds: Long, val likedByMe: Boolean, val replyCount: Int,
+        val canDelete: Boolean)
     data class CommentPage(val comments: List<Comment>, val total: Long, val more: Boolean)
 
     /** 对于旧数据才用歌名回查，并用 songmid 排除搜索结果里的同名版本。 */
@@ -310,12 +311,40 @@ object QqExtras {
         exact?.jsonObject?.get("songid")?.jsonPrimitive?.contentOrNull?.toLongOrNull()
     }.getOrNull()
 
+    private fun commentOf(el: JsonElement): Comment? = runCatching {
+        val o = el.jsonObject
+        val id = o["CmId"]?.jsonPrimitive?.contentOrNull ?: return null
+        val content = o["Content"]?.jsonPrimitive?.contentOrNull ?: return null
+        Comment(
+            id = id,
+            content = content,
+            nick = o["Nick"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "QQ 用户" },
+            avatar = o["Avatar"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                .replace("http://", "https://"),
+            likes = o["PraiseNum"]?.jsonPrimitive?.longOrNull ?: 0,
+            timeSeconds = o["PubTime"]?.jsonPrimitive?.longOrNull ?: 0,
+            likedByMe = o["IsPraised"]?.jsonPrimitive?.intOrNull == 1,
+            replyCount = (o["ReplyCnt"]?.jsonPrimitive?.intOrNull ?: 0).coerceAtLeast(0),
+            canDelete = o["IsSelf"]?.jsonPrimitive?.intOrNull == 1 ||
+                (o["Permission"]?.jsonPrimitive?.intOrNull ?: 0) >= 512,
+        )
+    }.getOrNull()
+
+    private fun commentPage(data: JsonObject): CommentPage {
+        val list = data["CommentList"]?.jsonObject
+        val comments = list?.get("Comments")?.jsonArray.orEmpty().mapNotNull(::commentOf)
+        val total = list?.get("Total")?.jsonPrimitive?.longOrNull
+            ?: data["TotalCmNum"]?.jsonPrimitive?.longOrNull ?: comments.size.toLong()
+        val more = list?.get("HasMore")?.jsonPrimitive?.booleanOrNull == true ||
+            list?.get("HasMore")?.jsonPrimitive?.intOrNull == 1
+        return CommentPage(comments, total, more)
+    }
+
     fun comments(songId: Long, latest: Boolean = false, page: Int = 1,
         pageSize: Int = 20): CommentPage = runCatching {
-        val newest = latest
         val data = QqLibrary.musicuData(
             "music.globalComment.CommentRead",
-            if (newest) "GetNewCommentList" else "GetHotCommentList",
+            if (latest) "GetNewCommentList" else "GetHotCommentList",
             buildJsonObject {
                 put("BizType", 1)
                 put("BizId", songId.toString())
@@ -323,7 +352,7 @@ object QqExtras {
                 put("PageSize", pageSize.coerceIn(1, 50))
                 put("PageNum", (page - 1).coerceAtLeast(0))
                 put("PicEnable", 1)
-                if (newest) {
+                if (latest) {
                     put("FromCommentId", "")
                     put("WithHot", 0)
                 } else {
@@ -332,28 +361,81 @@ object QqExtras {
                 }
             },
         ) ?: return CommentPage(emptyList(), 0, false)
-        val list = data["CommentList"]?.jsonObject
-        val comments = list?.get("Comments")?.jsonArray.orEmpty().mapNotNull { el ->
-            val o = el.jsonObject
-            val id = o["CmId"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val content = o["Content"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            Comment(
-                id = id,
-                content = content,
-                nick = o["Nick"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "QQ 用户" },
-                avatar = o["Avatar"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    .replace("http://", "https://"),
-                likes = o["PraiseNum"]?.jsonPrimitive?.longOrNull ?: 0,
-                timeSeconds = o["PubTime"]?.jsonPrimitive?.longOrNull ?: 0,
-                likedByMe = o["IsPraised"]?.jsonPrimitive?.intOrNull == 1,
-                replyCount = (o["ReplyCnt"]?.jsonPrimitive?.intOrNull ?: 0).coerceAtLeast(0),
-            )
-        }
-        val total = data["TotalCmNum"]?.jsonPrimitive?.longOrNull
-            ?: list?.get("Total")?.jsonPrimitive?.longOrNull ?: comments.size.toLong()
-        CommentPage(comments, total, list?.get("HasMore")?.jsonPrimitive?.booleanOrNull == true ||
-            list?.get("HasMore")?.jsonPrimitive?.intOrNull == 1)
+        commentPage(data)
     }.getOrDefault(CommentPage(emptyList(), 0, false))
+
+    fun replies(rootCommentId: String, page: Int = 1, pageSize: Int = 20): CommentPage = runCatching {
+        val data = QqLibrary.musicuData(
+            "music.globalComment.CommentRead",
+            "GetReplyCommentList",
+            buildJsonObject {
+                put("RootCmId", rootCommentId)
+                put("LastCommentSeqNo", "")
+                put("PageSize", pageSize.coerceIn(1, 50))
+                put("LastRankScore", "")
+                put("RankType", 1)
+                put("PicEnable", 1)
+                put("PageNum", (page - 1).coerceAtLeast(0))
+            },
+        ) ?: return CommentPage(emptyList(), 0, false)
+        commentPage(data)
+    }.getOrDefault(CommentPage(emptyList(), 0, false))
+
+    fun sendComment(songId: Long, content: String, repliedCommentId: String?,
+        cookies: Map<String, String>, uin: String): Boolean = runCatching {
+        require(content.isNotBlank() && content.trim().length <= 300 && cookies.isNotEmpty())
+        val result = QqLibrary.musicu(
+            "music.globalComment.CommentWriteServer",
+            "AddComment",
+            buildJsonObject {
+                put("BizType", 1)
+                put("BizId", songId.toString())
+                put("Content", content.trim())
+                put("RepliedCmId", repliedCommentId.orEmpty())
+                put("BgCardId", JsonNull)
+            },
+            cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            uin,
+        )
+        // 20015 is what the official web comment box treats as a successful submission.
+        result.code == 0 || result.code == 20015
+    }.getOrDefault(false)
+
+    fun likeComment(commentId: String, liked: Boolean,
+        cookies: Map<String, String>, uin: String): Boolean = runCatching {
+        if (cookies.isEmpty()) return false
+        val result = QqLibrary.musicu(
+            "GlobalComment.GlobalCommentWriteServer",
+            "UpdateHotComment",
+            buildJsonObject {
+                put("comment_id", commentId)
+                put("type", if (liked) 3 else 4)
+                put("uin", uin)
+            },
+            cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            uin,
+        )
+        if (!result.ok) return false
+        val data = result.data ?: return true
+        (data["code"]?.jsonPrimitive?.intOrNull ?: 0) == 0 &&
+            (data["subcode"]?.jsonPrimitive?.intOrNull ?: 0) == 0
+    }.getOrDefault(false)
+
+    fun deleteComment(commentId: String,
+        cookies: Map<String, String>, uin: String): Boolean = runCatching {
+        if (cookies.isEmpty()) return false
+        val result = QqLibrary.musicu(
+            "music.globalComment.CommentWriteServer",
+            "DelComment",
+            buildJsonObject { put("CommentId", commentId) },
+            cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            uin,
+        )
+        if (!result.ok) return false
+        val data = result.data ?: return true
+        (data["Subcode"]?.jsonPrimitive?.intOrNull ?: 0) == 0 &&
+            (data["Code"]?.jsonPrimitive?.intOrNull ?: 0) == 0
+    }.getOrDefault(false)
 }
 
 /** 各「模式」下主页推荐的数据源（都是公开接口，无需登录） */

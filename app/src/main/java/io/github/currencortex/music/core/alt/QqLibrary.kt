@@ -57,9 +57,13 @@ object QqLibrary {
             parse(stream.bufferedReader().use { it.readText() })
         }.getOrNull()
 
-    /** 当前 musicu RPC 的统一入口。成功时返回 req_0.data。 */
-    internal fun musicuData(module: String, method: String, param: JsonObject,
-        cookie: String = "", uin: String = "0"): JsonObject? {
+    data class MusicuResult(val code: Int?, val data: JsonObject?) {
+        val ok get() = code == 0
+    }
+
+    /** 当前 musicu RPC 的统一入口。保留业务码，写操作需要区分成功与登录失效。 */
+    internal fun musicu(module: String, method: String, param: JsonObject,
+        cookie: String = "", uin: String = "0"): MusicuResult {
         val authst = cookie.split(';').map(String::trim)
             .firstOrNull { it.startsWith("qm_keyst=") || it.startsWith("qqmusic_key=") }
             ?.substringAfter('=').orEmpty()
@@ -81,12 +85,18 @@ object QqLibrary {
                 put("param", param)
             }
         }
-        val root = postMusicu(body, cookie) ?: return null
-        if (root["code"]?.jsonPrimitive?.intOrNull?.let { it != 0 } == true) return null
-        val request = root["req_0"]?.jsonObject ?: return null
-        if (request["code"]?.jsonPrimitive?.intOrNull?.let { it != 0 } == true) return null
-        return request["data"]?.jsonObject
+        val root = postMusicu(body, cookie) ?: return MusicuResult(null, null)
+        val outer = root["code"]?.jsonPrimitive?.intOrNull
+        if (outer != null && outer != 0) return MusicuResult(outer, null)
+        val request = root["req_0"]?.jsonObject ?: return MusicuResult(null, null)
+        return MusicuResult(request["code"]?.jsonPrimitive?.intOrNull,
+            request["data"]?.jsonObject)
     }
+
+    /** 只读接口成功时返回 req_0.data。 */
+    internal fun musicuData(module: String, method: String, param: JsonObject,
+        cookie: String = "", uin: String = "0"): JsonObject? =
+        musicu(module, method, param, cookie, uin).takeIf { it.ok }?.data
 
     /** 诊断：把几个关键接口的返回码/条目数打出来，方便判断账号态是否可用 */
     fun probe(cookies: Map<String, String>, uin: String): String {

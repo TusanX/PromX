@@ -26,7 +26,7 @@ data class PlayerComments(val songId: Long? = null, val total: Long? = null, val
     val sort: CommentSort = CommentSort.RECOMMENDED, val nextPage: Int = 1, val cursor: String? = null,
     val meUid: Long = 0, val replies: Map<String, CommentReplies> = emptyMap(),
     val busy: Set<String> = emptySet(), val actionError: String? = null, val retryMore: Boolean = false,
-    val readOnly: Boolean = false)
+    val maxLength: Int = 1000)
 data class CommentReplies(val comments: List<NeteaseComment> = emptyList(), val total: Long = 0,
     val cursor: String? = null, val more: Boolean = false, val loading: Boolean = false, val error: String? = null)
 data class PlayerCommentComposer(val input: TextFieldState = TextFieldState(), val replyTo: NeteaseComment? = null,
@@ -86,7 +86,8 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
     private var heartStartRevision = 0L
     private val heartMutex = Mutex()
     private val netease = container.neteaseSongActions
-    private val songComments = SongCommentsRepository(container.apiClient) { container.musicSession() }
+    private val songComments = SongCommentsRepository(container.apiClient,
+        { container.musicSession() }) { container.qqSession }
     private val commentOperations = mutableListOf<Job>()
     init {
         viewModelScope.launch { container.accountRepository.sessionRevision.drop(1).collect { ai.close() } }
@@ -306,7 +307,7 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
                             more = page.more, cursor = null, nextPage = current.nextPage + 1, meUid = page.meUid,
                             enhanced = true, loading = false, error = null,
                             replies = if (more) current.replies else emptyMap(),
-                            readOnly = song.musicSource == MusicSource.QQ_MUSIC)
+                            maxLength = if (song.musicSource == MusicSource.QQ_MUSIC) 300 else 1000)
                         _actions.update { it.copy(commentCount = page.total) }
                     }
                     is AppResult.Failure -> _comments.update { it.copy(loading = false, error = result.message) }
@@ -352,20 +353,24 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
         commentsEpoch++
         commentsJob?.cancel(); commentOperations.forEach(Job::cancel); commentOperations.clear()
         _comments.value = PlayerComments(songId = _comments.value.songId, enhanced = _comments.value.enhanced,
-            sort = sort, readOnly = _comments.value.readOnly)
+            sort = sort, maxLength = _comments.value.maxLength)
         loadComments()
     }
     fun loadCommentReplies(comment: NeteaseComment, more: Boolean = false) {
         val current = _comments.value
         val id = current.songId ?: return
-        if (current.readOnly) return
         val old = current.replies[comment.id] ?: CommentReplies()
         if (current.loading || current.busy.isNotEmpty() || old.loading || more && !old.more) return
         val epoch = commentsEpoch
         _comments.update { it.copy(replies = it.replies + (comment.id to old.copy(loading = true, error = null))) }
         commentOperations.removeAll { it.isCompleted }
         commentOperations += viewModelScope.launch {
-            val result = appResult { songComments.replies(id, comment.id, if (more) old.cursor else null) }
+            val song = queue.value.current
+            val result = appResult {
+                if (song?.musicSource == MusicSource.QQ_MUSIC)
+                    songComments.replies(song, comment.id, if (more) old.cursor else null)
+                else songComments.replies(id, comment.id, if (more) old.cursor else null)
+            }
             if (epoch != commentsEpoch) return@launch
             _comments.update { state ->
                 val latest = state.replies[comment.id] ?: old
@@ -384,7 +389,6 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
     private fun changeComment(comment: NeteaseComment, delete: Boolean) {
         val current = _comments.value
         val id = current.songId ?: return
-        if (current.readOnly) return
         if (current.busy.isNotEmpty() || commentComposer.value.sending || current.loading || current.replies.values.any { it.loading }) return
         if (delete && (current.meUid == 0L || comment.userId != current.meUid)) return
         val epoch = commentsEpoch
@@ -406,7 +410,13 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
                     }
                     if (!ok) throw ApiException(ErrorKind.Server, userMessage = "B站 评论点赞失败")
                     Unit
-                } else if (delete) songComments.delete(id, comment.id) else songComments.like(id, comment.id, !comment.likedByMe)
+                } else {
+                    val song = queue.value.current
+                    if (song?.musicSource == MusicSource.QQ_MUSIC) {
+                        if (delete) songComments.delete(song, comment.id)
+                        else songComments.like(song, comment.id, !comment.likedByMe)
+                    } else if (delete) songComments.delete(id, comment.id) else songComments.like(id, comment.id, !comment.likedByMe)
+                }
             }
             if (epoch != commentsEpoch) return@launch
             _comments.update { state ->
@@ -427,19 +437,19 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
     fun onCommentEdited() { if (!commentComposer.value.sending) commentComposer.update { it.copy(error = null, message = null) } }
     fun replyTo(comment: NeteaseComment?) { if (!commentComposer.value.sending) commentComposer.update { it.copy(replyTo = comment, error = null, message = null) } }
     fun sendComment() {
-        if (queue.value.current?.musicSource == MusicSource.QQ_MUSIC) {
-            commentComposer.update { it.copy(error = "QQ 音乐评论暂时只能浏览") }
-            return
-        }
-        val id = NeteaseSongActionsRepository.songId(queue.value.current) ?: return
+        val song = queue.value.current ?: return
+        val id = NeteaseSongActionsRepository.songId(song) ?: song.id
         val draft = commentComposer.value
         val content = draft.draft
-        if (draft.sending || content.isBlank() || content.length > 1000 || _comments.value.loading || _comments.value.busy.isNotEmpty()) return
+        if (draft.sending || content.isBlank() || content.length > _comments.value.maxLength ||
+            _comments.value.loading || _comments.value.busy.isNotEmpty()) return
         val epoch = commentsEpoch
         commentComposer.update { it.copy(sending = true, error = null, message = null) }
         commentSendJob = viewModelScope.launch {
             val result = appResult {
-                if (_comments.value.enhanced == true) songComments.send(id, content, draft.replyTo?.id)
+                if (song.musicSource == MusicSource.BILIBILI)
+                    throw ApiException(ErrorKind.Server, userMessage = "B站评论发送暂未接入")
+                if (_comments.value.enhanced == true) songComments.send(song, content, draft.replyTo?.id)
                 else netease.sendComment(id, content, draft.replyTo?.commentId)
             }
             if (epoch != commentsEpoch) return@launch
