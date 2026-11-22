@@ -118,7 +118,10 @@ object QqLibrary {
         val data = musicuData(
             "music.musicasset.PlaylistBaseRead",
             "GetPlaylistByUin",
-            buildJsonObject { put("uin", uin) },
+            buildJsonObject {
+                put("uin", uin)
+                put("bWithoutStatus", false)
+            },
             cookie,
             uin,
         ) ?: return emptyList()
@@ -133,7 +136,7 @@ object QqLibrary {
                 title = listOf("dirName", "diss_name", "dissname", "title")
                     .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.contentOrNull }
                     .orEmpty().ifBlank { if (dirId == 201L) "我喜欢" else "歌单 $id" },
-                cover = listOf("dirCover", "diss_cover", "logo", "cover")
+                cover = listOf("picUrl", "dirCover", "diss_cover", "logo", "cover")
                     .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.contentOrNull }.orEmpty(),
                 count = listOf("songNum", "song_cnt", "songnum", "song_num")
                     .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.contentOrNull?.toIntOrNull() }
@@ -180,7 +183,7 @@ object QqLibrary {
 
     /** 我喜欢：QQ 的「我喜欢」是特殊歌单，tid 固定为 201（不同账号可能是 dissid） */
     fun likedFolderId(uin: String, cookie: String): Long = runCatching {
-        ownedPlaylists(uin, cookie).firstOrNull { it.dirId == 201L }?.id?.let { return it }
+        ownedPlaylists(uin, cookie).firstOrNull(::isLikedFolder)?.id?.let { return it }
         val body = get("https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss?hostuin=$uin&sin=0&size=200&format=json", cookie)
         val list = parse(body)?.get("data")?.jsonObject?.get("disslist")?.jsonArray ?: return 201L
         list.firstOrNull { el ->
@@ -193,6 +196,11 @@ object QqLibrary {
             }
         } ?: profileFavoriteId(uin, cookie) ?: 201L
     }.getOrDefault(201L)
+
+    private fun isLikedFolder(folder: Folder): Boolean =
+        folder.dirId == 201L || folder.title.trim().equals("我喜欢", true) ||
+            folder.title.contains("我喜欢") || folder.title.contains("喜欢的音乐") ||
+            folder.title.equals("Liked Songs", true)
 
     private fun profileFavoriteId(uin: String, cookie: String): Long? = runCatching {
         val body = get("https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg" +

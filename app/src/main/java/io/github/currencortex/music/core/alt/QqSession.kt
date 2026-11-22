@@ -29,12 +29,13 @@ class QqSessionStore(context: Context) {
             putString("avatar", value?.avatar)
         }.apply()
 
-    val loggedIn get() = account != null && cookies.isNotEmpty()
+    val loggedIn get() = uin.isNotBlank() && cookies.isNotEmpty()
 
     fun cookieHeader(): String = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
 
     /** 当前登录 uin（会员曲 vkey 必填） */
-    val uin: String get() = account?.uin.orEmpty()
+    val uin: String get() = account?.uin?.takeIf(String::isNotBlank)
+        ?: QqAuth.resolveUin(cookies)
 
     fun clear() = prefs.edit().clear().apply()
 }

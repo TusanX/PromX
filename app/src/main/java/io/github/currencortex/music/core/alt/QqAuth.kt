@@ -162,7 +162,7 @@ object QqAuth {
 
     /** 从 Cookie 里解析 QQ 号：uin/p_uin 形如 o0123456789，需去掉前缀 o */
     fun resolveUin(cookies: Map<String, String>): String {
-        val candidates = listOf("uin", "p_uin", "ptui_loginuin", "qm_uin", "wxuin", "luin")
+        val candidates = listOf("uin", "p_uin", "qqmusic_uin", "ptui_loginuin", "qm_uin", "wxuin", "luin")
         for (name in candidates) {
             val raw = cookies[name] ?: continue
             val digits = raw.removePrefix("o").removePrefix("O").filter { it.isDigit() }
