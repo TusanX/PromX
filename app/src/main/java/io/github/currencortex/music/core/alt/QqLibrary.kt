@@ -139,58 +139,156 @@ object QqLibrary {
     fun listeningReport(cookies: Map<String, String>, uin: String): ListeningReport? = runCatching {
         if (uin.isBlank()) return null
         val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        val encryptedUin = runCatching {
-            val body = get("https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss" +
-                "?hostuin=$uin&sin=0&size=1&format=json", cookie)
-            parse(body)?.get("data")?.jsonObject?.get("encrypt_uin")?.jsonPrimitive?.contentOrNull
-        }.getOrNull().orEmpty().ifBlank {
-            cookies["encrypt_uin"] ?: cookies["qqmusic_euin"] ?: return null
-        }
+        // qq-music-api reads the signed-in user's report with no business parameters. Forwarding
+        // VisitAccount or another user's encrypted id is rejected or returns the public shell.
         val data = musicuData(
             "music.recommend.UserProfileSettingSvr",
             "GetProfileReport",
-            buildJsonObject { put("VisitAccount", encryptedUin) },
+            buildJsonObject {},
             cookie,
             uin,
         ) ?: return null
-        val user = data["UserInfoCard"]?.jsonObject
-        val report = data["ListeningReport"]?.jsonObject
-        val months = report?.get("Report")?.jsonArray.orEmpty().mapNotNull { item ->
-            val month = item.jsonObject["Month"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-            ListeningMonth(month, item.jsonObject["Num"]?.jsonPrimitive?.longOrNull ?: 0L)
+        fun JsonObject.long(key: String): Long? = this[key]?.jsonPrimitive?.longOrNull
+            ?: this[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+        fun JsonObject.text(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+            ?.takeIf(String::isNotBlank)
+        fun JsonElement.visitObjects(block: (JsonObject) -> Unit) {
+            when (this) {
+                is JsonObject -> {
+                    block(this)
+                    values.forEach { it.visitObjects(block) }
+                }
+                is JsonArray -> forEach { it.visitObjects(block) }
+                else -> Unit
+            }
         }
-        fun cardFrom(base: JsonObject?, key: String): ListeningCard? {
+
+        val objects = mutableListOf<JsonObject>()
+        data.visitObjects { objects += it }
+        fun firstText(vararg keys: String): String = keys.firstNotNullOfOrNull { key ->
+            objects.firstNotNullOfOrNull { it.text(key) }
+        }.orEmpty()
+        fun firstObject(vararg keys: String): JsonObject? = keys.firstNotNullOfOrNull { key ->
+            objects.firstNotNullOfOrNull { it[key] as? JsonObject }
+        }
+
+        val user = firstObject("UserInfoCard", "UserInfo", "AccountInfo")
+        val monthRows = objects.asSequence().flatMap { objectValue ->
+            val arrays = objectValue.values.filterIsInstance<JsonArray>()
+            arrays.asSequence().flatMap { it.asSequence() }.mapNotNull { it as? JsonObject }
+        }.mapNotNull { row ->
+            val month = listOf("Month", "MonthNo", "month", "month_no").firstNotNullOfOrNull { row.long(it) }
+                ?.takeIf { it in 1L..12L }?.toInt() ?: return@mapNotNull null
+            val count = listOf("Num", "Count", "count", "ListenNum", "play_num")
+                .firstNotNullOfOrNull { row.long(it) } ?: 0L
+            ListeningMonth(month, count)
+        }.distinctBy { it.month }.sortedBy { it.month }.toList()
+
+        fun cardFrom(base: JsonObject?, fallbackKey: String): ListeningCard? {
             if (base == null) return null
             val value = base["TypeTitle"]?.jsonPrimitive?.contentOrNull.orEmpty()
             if (value.isBlank()) return null
             return ListeningCard(
-                key = key,
+                key = base.text("KeyWord") ?: fallbackKey,
                 title = base["KeyWord"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 value = value,
                 summary = base["Slogan"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 image = base["Pic"]?.jsonPrimitive?.contentOrNull.orEmpty().replace("http://", "https://"),
             )
         }
-        val cards = listOf("Singers", "Ages", "Genres", "BPM", "Grooving", "Personality",
-            "TimePreference", "CharacterColor").flatMap { key ->
-            when (val value = data[key]) {
-                is JsonArray -> value.mapNotNull { item -> cardFrom(item.jsonObject["Base"]?.jsonObject, key) }
-                is JsonObject -> listOfNotNull(cardFrom(value["Base"]?.jsonObject, key))
-                else -> emptyList()
-            }
-        }.distinctBy { it.key to it.value }.take(9)
-        val description = data["MainDescription"]?.jsonObject?.get("Description")
-            ?.jsonPrimitive?.contentOrNull.orEmpty()
-        if (months.isEmpty() && cards.isEmpty()) return null
+        val cards = objects.mapNotNull { objectValue ->
+            cardFrom(objectValue["Base"] as? JsonObject, objectValue.text("Type") ?: "profile")
+        }.distinctBy { it.value to it.title }.take(9)
+        val description = firstText("Description", "MainDescription", "ReportDescription")
+        if (monthRows.isEmpty() && cards.isEmpty()) return null
         ListeningReport(
-            nickname = user?.get("NickName")?.jsonPrimitive?.contentOrNull.orEmpty(),
-            avatar = user?.get("HeadUrl")?.jsonPrimitive?.contentOrNull.orEmpty().replace("http://", "https://"),
-            signature = user?.get("Signature")?.jsonPrimitive?.contentOrNull.orEmpty(),
-            months = months,
+            nickname = user?.text("NickName") ?: firstText("NickName", "Nickname", "nick"),
+            avatar = (user?.text("HeadUrl") ?: firstText("HeadUrl", "Avatar", "avatar"))
+                .replace("http://", "https://"),
+            signature = user?.text("Signature") ?: firstText("Signature", "signature"),
+            months = monthRows,
             cards = cards,
             description = description,
         )
     }.getOrNull()
+
+    /** 全站收藏数，用于播放页红心旁的数字；歌曲能否播放仍由实际取流结果决定。 */
+    fun songFavoriteCount(songId: Long, cookies: Map<String, String>, uin: String): Long? = runCatching {
+        if (songId <= 0) return null
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val data = musicuData(
+            "music.musicasset.SongFavRead",
+            "GetSongFansNumberById",
+            buildJsonObject { putJsonArray("v_songId") { add(songId) } },
+            cookie,
+            uin.ifBlank { "0" },
+        ) ?: return null
+        val numbers = data["m_numbers"]?.jsonObject
+        val display = data["m_show"]?.jsonObject
+        numbers?.get(songId.toString())?.jsonPrimitive?.longOrNull
+            ?: numbers?.get(songId.toString())?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+            ?: display?.get(songId.toString())?.jsonPrimitive?.contentOrNull
+                ?.filter(Char::isDigit)?.toLongOrNull()
+    }.getOrNull()
+
+    /** 登录账号的今日 30 首，与 QQ 音乐 App 每日推荐使用同一类目。 */
+    fun dailyRecommendations(cookies: Map<String, String>, uin: String): List<Track> = runCatching {
+        if (uin.isBlank()) return emptyList()
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val data = musicuData(
+            "music.srfDissInfo.aiDissInfo",
+            "uniform_get_Dissinfo",
+            buildJsonObject {
+                put("dirid", 202)
+                put("optype", 3)
+                put("tag", 1)
+                put("userinfo", 0)
+                put("pic_dpi", 300)
+            },
+            cookie,
+            uin,
+        ) ?: return emptyList()
+        data["songlist"]?.jsonArray.orEmpty().mapNotNull(::trackOf)
+    }.getOrDefault(emptyList())
+
+    /** 登录账号的猜你喜欢，单次通常返回约 5 首。 */
+    fun guessYouLike(cookies: Map<String, String>, uin: String): List<Track> = runCatching {
+        if (uin.isBlank()) return emptyList()
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val data = musicuData(
+            "music.radioProxy.MbTrackRadioSvr",
+            "get_radio_track",
+            buildJsonObject {
+                put("id", 99)
+                put("firstplay", 1)
+                put("num", 15)
+            },
+            cookie,
+            uin,
+        ) ?: return emptyList()
+        data["tracks"]?.jsonArray.orEmpty().mapNotNull(::trackOf)
+    }.getOrDefault(emptyList())
+
+    /** 当前账号近一周的常听歌曲，参数与 Folia 的 ListenReportSvr.GetRank 一致。 */
+    fun weeklyListening(cookies: Map<String, String>, uin: String): List<Track> = runCatching {
+        if (uin.isBlank()) return emptyList()
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val data = musicuData(
+            "music.individuation.ListenReportSvr",
+            "GetRank",
+            buildJsonObject {
+                put("type", 2)
+                put("uin", "")
+                put("version", "v2")
+                put("token", "")
+            },
+            cookie,
+            uin,
+        ) ?: return emptyList()
+        data["rank"]?.jsonArray.orEmpty().mapNotNull { item ->
+            item.jsonObject["track"]?.jsonObject?.let(::trackOf)
+        }.distinctBy(Track::mid).take(30)
+    }.getOrDefault(emptyList())
 
     /** 当前账号自建歌单。GetPlaylistByUin 同时提供 tid 和 dirId，写「我喜欢」时不会再猜目录号。 */
     fun ownedPlaylists(uin: String, cookie: String): List<Folder> = runCatching {

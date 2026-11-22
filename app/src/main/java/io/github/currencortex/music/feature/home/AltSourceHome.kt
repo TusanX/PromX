@@ -16,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -66,8 +65,8 @@ private data class AltSourceTheme(
 private fun themeFor(source: MusicSource) = when (source) {
     MusicSource.QQ_MUSIC -> AltSourceTheme(
         accent = Color(0xFF31C27C), icon = R.drawable.brand_qqmusic_official,
-        heroTitle = "QQ 热歌榜", heroSubtitle = "热歌与本周新歌，打开就能连着听",
-        chartTitle = "此刻最热", recentTitle = "最近播放", playlistsTitle = "我的 QQ 歌单",
+        heroTitle = "QQ 每日推荐", heroSubtitle = "结合你的播放、收藏与近期偏好，整理今天适合你的歌",
+        chartTitle = "每日推荐", recentTitle = "最近常听", playlistsTitle = "我的 QQ 歌单",
     )
     else -> AltSourceTheme(
         accent = Color(0xFFFB7299), icon = R.drawable.brand_bilibili,
@@ -143,7 +142,7 @@ private fun themeFor(source: MusicSource) = when (source) {
             MusicTextAction("部分内容加载失败，重新加载", onRetry, Modifier.testTag("alt_home_retry"), !loading)
         }
 
-        item(key = "for_you_header") { SettingsListHeader(if (source == MusicSource.QQ_MUSIC) "为你挑的新歌" else "继续发现") }
+        item(key = "for_you_header") { SettingsListHeader(if (source == MusicSource.QQ_MUSIC) "猜你喜欢" else "继续发现") }
         if (loading && home.forYou.isEmpty()) item(key = "for_you_loading") {
             LoadingArtworkCards(148.dp)
         }
@@ -179,7 +178,7 @@ private fun themeFor(source: MusicSource) = when (source) {
         }
         if (!loading && home.daily.isEmpty() && error == null) item(key = "chart_empty") {
             SourceEmptyState(
-                title = if (source == MusicSource.QQ_MUSIC) "热歌榜暂时为空" else "还没有拿到 B站 推荐",
+                title = if (source == MusicSource.QQ_MUSIC) "每日推荐暂时为空" else "还没有拿到 B站 推荐",
                 detail = if (source == MusicSource.QQ_MUSIC) "稍后刷新，或直接搜索一首歌" else "登录 B站 后会优先使用你的推荐流",
                 action = "重新加载", onAction = onRetry,
             )
@@ -238,13 +237,12 @@ private fun SourceHeroCard(
     connected: Boolean, canPlay: Boolean, onPlay: () -> Unit, onOpen: () -> Unit, onLogin: () -> Unit,
 ) {
     val lead = songs.firstOrNull()
-    val shape = RoundedCornerShape(26.dp)
+    val shape = RoundedCornerShape(22.dp)
     val colors = MiuixTheme.colorScheme
     Column(
         Modifier.fillMaxWidth().clip(shape)
-            .background(Brush.linearGradient(listOf(visual.accent.copy(alpha = .28f), colors.surfaceContainer, colors.surfaceContainer)))
-            .background(Color.Black.copy(alpha = .08f)).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .background(colors.surfaceContainer).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(visual.icon), null, Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)))
@@ -322,7 +320,7 @@ private fun HeroPill(label: String, accent: Color, enabled: Boolean, onClick: ()
 @Composable
 private fun SourceShortcuts(source: MusicSource, navigate: (String) -> Unit) {
     val items = if (source == MusicSource.QQ_MUSIC) listOf(
-        Triple("热歌榜", "lib/daily", MusicIcons.List),
+        Triple("每日推荐", "lib/daily", MusicIcons.List),
         Triple("我喜欢", "lib/likes", MusicIcons.Heart),
         Triple("歌单", "lib/playlists", MusicIcons.Folder),
         Triple("最近", "lib/recent", MusicIcons.Update),

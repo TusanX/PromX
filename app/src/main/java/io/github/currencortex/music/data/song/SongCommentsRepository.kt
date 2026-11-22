@@ -23,7 +23,8 @@ data class SongCommentsPage(val comments: List<NeteaseComment>, val total: Long,
 
 /** Local NetEase credentials stay on-device; otherwise the project uses its saved binding. */
 class SongCommentsRepository(private val api: ApiClient, private val session: () -> RequestSession,
-    private val qqSession: (() -> io.github.currencortex.music.core.alt.QqSessionStore?)? = null) {
+    private val qqSession: (() -> io.github.currencortex.music.core.alt.QqSessionStore?)? = null,
+    private val biliSession: (() -> io.github.currencortex.music.core.alt.BiliSessionStore?)? = null) {
     private suspend fun call(method: String, path: String, query: Map<String, String> = emptyMap(), body: JsonObject? = null): JsonElement {
         val owner = session()
         val native = api.hasLocalNeteaseLogin || api.nativeMediaEnabled
@@ -45,24 +46,39 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
         val dto = api.decode<CommentPageDto>(call("GET", path, query))
         return SongCommentsPage(dto.comments.map(CommentDto::toDomain), dto.total, dto.more, dto.nextCursor, dto.meUid)
     }
+    private fun biliComment(comment: io.github.currencortex.music.core.alt.BiliPlayback.Comment): NeteaseComment = NeteaseComment(
+        commentId = comment.id.toLongOrNull() ?: 0L,
+        content = comment.content,
+        time = comment.timeSec * 1000,
+        likedCount = comment.likes,
+        user = NeteaseCommentUser(comment.user, comment.avatar),
+        id = comment.id,
+        userId = comment.userId,
+        likedByMe = comment.likedByMe,
+        replyCount = comment.replyCount,
+    )
+
+    private suspend fun biliAid(song: Song, cookie: String): String? {
+        val bvid = song.externalIds.bilibiliBvid ?: return null
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.BiliPlayback.videoInfo(bvid, cookie)?.aid
+        }
+    }
+
     /** 按歌曲来源分派：QQ 音乐走自己的评论接口（无需登录） */
     suspend fun comments(song: Song, sort: CommentSort, page: Int = 1): SongCommentsPage {
         // B站：按 aid 查视频评论（type=1）
         if (song.musicSource == MusicSource.BILIBILI) {
-            val bvid = song.externalIds.bilibiliBvid ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
-            val info = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.BiliPlayback.videoInfo(bvid)
-            } ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
+            val bili = biliSession?.invoke()
+            val cookie = bili?.takeIf { it.loggedIn }?.cookieHeader().orEmpty()
+            val aid = biliAid(song, cookie) ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
             val raw = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 io.github.currencortex.music.core.alt.BiliPlayback.comments(
-                    info.aid, hot = sort != CommentSort.LATEST, page = page)
+                    aid, hot = sort != CommentSort.LATEST, page = page, cookie = cookie)
             }
-            val list = raw.mapIndexed { index, c ->
-                NeteaseComment(index.toLong(), c.content, c.timeSec * 1000, c.likes,
-                    NeteaseCommentUser(c.user, c.avatar), emptyList(), c.id.ifBlank { "${info.aid}-$index" },
-                    0, false, 0)
-            }
-            return SongCommentsPage(list, list.size.toLong(), false, null, 0)
+            val me = bili?.profile?.mid ?: 0L
+            return SongCommentsPage(raw.comments.map(::biliComment), raw.total,
+                raw.more, raw.nextCursor, me)
         }
         if (song.musicSource != MusicSource.QQ_MUSIC) return comments(song.id, sort, page)
         // 歌单、红心和榜单映射现在会保留数字 songid；旧队列条目才按标题和 songmid 回查。
@@ -86,6 +102,18 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
     }
 
     suspend fun replies(song: Song, commentId: String, cursor: String? = null): SongCommentsPage {
+        if (song.musicSource == MusicSource.BILIBILI) {
+            val page = cursor?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+            val bili = biliSession?.invoke()
+            val cookie = bili?.takeIf { it.loggedIn }?.cookieHeader().orEmpty()
+            val aid = biliAid(song, cookie) ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
+            val raw = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.BiliPlayback.replies(aid, commentId, page, cookie = cookie)
+            }
+            val me = bili?.profile?.mid ?: 0L
+            return SongCommentsPage(raw.comments.map(::biliComment), raw.total, raw.more,
+                raw.nextCursor ?: if (raw.more) (page + 1).toString() else null, me)
+        }
         if (song.musicSource != MusicSource.QQ_MUSIC) {
             return SongCommentsPage(emptyList(), 0, false, null, 0)
         }
@@ -133,6 +161,18 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
     }
 
     suspend fun send(song: Song, content: String, replyTo: String? = null) {
+        if (song.musicSource == MusicSource.BILIBILI) {
+            val bili = biliSession?.invoke()?.takeIf { it.loggedIn }
+                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 B站")
+            val cookie = bili.cookieHeader()
+            val aid = biliAid(song, cookie) ?: throw ApiException(ErrorKind.NotFound)
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.BiliPlayback.sendComment(
+                    aid, content, replyTo, cookie, bili.cookies["bili_jct"].orEmpty())
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "B站评论发送失败")
+            return
+        }
         if (song.musicSource != MusicSource.QQ_MUSIC) {
             val id = song.externalIds.neteaseId?.toLongOrNull() ?: song.id
             send(id, content, replyTo)
@@ -150,6 +190,18 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
     }
 
     suspend fun like(song: Song, commentId: String, liked: Boolean) {
+        if (song.musicSource == MusicSource.BILIBILI) {
+            val bili = biliSession?.invoke()?.takeIf { it.loggedIn }
+                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 B站")
+            val cookie = bili.cookieHeader()
+            val aid = biliAid(song, cookie) ?: throw ApiException(ErrorKind.NotFound)
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.BiliPlayback.likeComment(
+                    aid, commentId, liked, cookie, bili.cookies["bili_jct"].orEmpty())
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "B站评论点赞失败")
+            return
+        }
         if (song.musicSource != MusicSource.QQ_MUSIC) {
             like(song.externalIds.neteaseId?.toLongOrNull() ?: song.id, commentId, liked)
             return
@@ -164,6 +216,18 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
     }
 
     suspend fun delete(song: Song, commentId: String) {
+        if (song.musicSource == MusicSource.BILIBILI) {
+            val bili = biliSession?.invoke()?.takeIf { it.loggedIn }
+                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 B站")
+            val cookie = bili.cookieHeader()
+            val aid = biliAid(song, cookie) ?: throw ApiException(ErrorKind.NotFound)
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.BiliPlayback.deleteComment(
+                    aid, commentId, cookie, bili.cookies["bili_jct"].orEmpty())
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "B站评论删除失败")
+            return
+        }
         if (song.musicSource != MusicSource.QQ_MUSIC) {
             delete(song.externalIds.neteaseId?.toLongOrNull() ?: song.id, commentId)
             return

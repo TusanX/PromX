@@ -25,6 +25,7 @@ import io.github.currencortex.music.ui.component.nativeui.SettingsGroup
 import io.github.currencortex.music.ui.component.nativeui.SettingsHint
 import io.github.currencortex.music.ui.component.nativeui.MusicSubpage
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
@@ -112,24 +113,31 @@ fun QqListeningReportScreen(container: AppContainer, onBack: () -> Unit, onLogin
                         }
                     }
                 }
-                report?.cards?.chunked(2)?.forEachIndexed { index, cards ->
-                    item("cards-$index") {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            cards.forEach { card ->
-                                Column(Modifier.weight(1f).background(
-                                    MiuixTheme.colorScheme.onSurface.copy(alpha = .045f), RoundedCornerShape(20.dp))
-                                    .padding(14.dp).testTag("qq_listening_${card.key}_${card.value}"),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(card.title, fontSize = 11.sp,
-                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                                    Text(card.value, fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
-                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(card.summary, fontSize = 11.sp, lineHeight = 16.sp,
-                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                        maxLines = 3, overflow = TextOverflow.Ellipsis)
+                report?.cards?.takeIf(List<*>::isNotEmpty)?.let { cards ->
+                    item("profile") {
+                        SettingsGroup(Modifier.testTag("qq_listening_profile")) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp)) {
+                                Text("听歌画像", fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(bottom = 8.dp))
+                                cards.forEachIndexed { index, card ->
+                                    if (index > 0) HorizontalDivider(
+                                        color = MiuixTheme.colorScheme.onSurface.copy(alpha = .07f))
+                                    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                                        .testTag("qq_listening_${card.key}_${card.value}"),
+                                        horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                                        Column(Modifier.width(82.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Text(card.title.ifBlank { "偏好" }, fontSize = 12.sp,
+                                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                                            Text(card.value, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+                                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        }
+                                        Text(card.summary.ifBlank { "来自最近一段时间的听歌记录" },
+                                            Modifier.weight(1f), fontSize = 13.sp, lineHeight = 19.sp,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                            maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                    }
                                 }
                             }
-                            if (cards.size == 1) Spacer(Modifier.weight(1f))
                         }
                     }
                 }

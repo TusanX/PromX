@@ -104,7 +104,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                     title = "连接 QQ 音乐",
                     summary = "同步我喜欢与自建歌单，并在 PromX 中播放账号可用的曲目。",
                     accent = Color(0xFF31C27C),
-                    features = listOf("热歌榜", "我喜欢", "我的歌单"),
+                    features = listOf("每日推荐", "猜你喜欢", "我喜欢", "我的歌单"),
                 )
             }
             account?.let { acc ->

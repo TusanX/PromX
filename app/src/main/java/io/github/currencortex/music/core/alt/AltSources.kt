@@ -385,6 +385,15 @@ object QqExtras {
         .replace("&#45;", "-").replace("&#40;", "(").replace("&#41;", ")")
         .replace("&#32;", " ").replace("&amp;", "&").replace("&#39;", "'")
 
+    private fun JsonElement?.longValue(): Long? = this?.jsonPrimitive?.longOrNull
+        ?: this?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+
+    private fun JsonElement?.truthy(): Boolean = when (this) {
+        null, JsonNull -> false
+        is JsonPrimitive -> booleanOrNull == true || contentOrNull == "1" || contentOrNull == "true"
+        else -> false
+    }
+
     /** 返回 LRC 文本（[mm:ss.xx] 行），失败返回 null */
     fun lyric(songmid: String): String? = runCatching {
         val raw = get("https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric.fcg?format=json&nobase64=1" +
@@ -437,11 +446,65 @@ object QqExtras {
         )
     }.getOrNull()
 
+    /** 新版歌曲关联 MV 接口，返回的信息比旧版 GetMvBySongid 完整。 */
+    fun mvBySongId(songId: Long, cookies: Map<String, String>, uin: String): MvInfo? = runCatching {
+        if (songId <= 0) return null
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val list = QqLibrary.musicuData(
+            "MvService.MvInfoProServer",
+            "GetSongRelatedMv",
+            buildJsonObject {
+                put("songid", songId.toString())
+                put("songtype", 1)
+                put("lastmvid", 0)
+            },
+            cookie,
+            uin,
+        )?.get("list")?.jsonArray.orEmpty()
+        val info = list.firstOrNull { it.jsonObject["vid"]?.jsonPrimitive?.contentOrNull?.isNotBlank() == true }
+            ?.jsonObject ?: return null
+        val vid = info["vid"]?.jsonPrimitive?.contentOrNull ?: return null
+        MvInfo(
+            id = info["mvid"]?.jsonPrimitive?.longOrNull ?: 0,
+            vid = vid,
+            title = info["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            cover = info["picurl"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                .replace("http://", "https://"),
+            durationMs = (info["duration"]?.jsonPrimitive?.longOrNull ?: 0L) * 1000,
+        )
+    }.getOrNull()
+
     /** 腾讯视频公开播放信息，返回可直接交给 Media3 的 MP4 地址。 */
     fun mvStream(vid: String, cookies: Map<String, String>, uin: String,
         defn: String = "shd"): MvStream? = runCatching {
         if (vid.isBlank()) return null
         val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        // Folia 使用的账号态 MV 接口优先，腾讯视频旧接口只作兼容回退。
+        val accountUrl = runCatching {
+            val data = QqLibrary.musicuData(
+                "music.stream.MvUrlProxy",
+                "GetMvUrls",
+                buildJsonObject {
+                    putJsonArray("vids") { add(vid) }
+                    put("request_type", 10003)
+                    put("guid", java.util.UUID.randomUUID().toString().replace("-", ""))
+                },
+                cookie,
+                uin.ifBlank { "0" },
+            ) ?: return@runCatching null
+            val files = data[vid]?.jsonObject?.get("mp4")?.jsonArray.orEmpty()
+                .filter { it.jsonObject["code"]?.jsonPrimitive?.intOrNull == 0 }
+                .sortedByDescending { it.jsonObject["filetype"]?.jsonPrimitive?.intOrNull ?: 0 }
+            files.firstNotNullOfOrNull { file ->
+                val value = file.jsonObject
+                listOf(value["url"], value["freeflow_url"])
+                    .flatMap { it?.jsonArray.orEmpty() }
+                    .firstNotNullOfOrNull { url ->
+                        url.jsonPrimitive.contentOrNull?.takeIf { it.startsWith("http") }
+                    }
+            }
+        }.getOrNull()
+        if (!accountUrl.isNullOrBlank()) return MvStream(accountUrl)
         val url = "https://vv.video.qq.com/getinfo?vids=" +
             java.net.URLEncoder.encode(vid, "UTF-8") +
             "&platform=101001&otype=json&defn=${java.net.URLEncoder.encode(defn, "UTF-8")}" +
@@ -484,15 +547,33 @@ object QqExtras {
         )
     }.getOrNull()
 
-    private fun commentPage(data: JsonObject): CommentPage {
+    private fun commentPage(data: JsonObject, page: Int, pageSize: Int): CommentPage {
         val list = data["CommentList"]?.jsonObject
         val comments = list?.get("Comments")?.jsonArray.orEmpty().mapNotNull(::commentOf)
-        val total = list?.get("Total")?.jsonPrimitive?.longOrNull
-            ?: data["TotalCmNum"]?.jsonPrimitive?.longOrNull ?: comments.size.toLong()
-        val more = list?.get("HasMore")?.jsonPrimitive?.booleanOrNull == true ||
-            list?.get("HasMore")?.jsonPrimitive?.intOrNull == 1
+        val total = list?.get("Total")?.longValue()
+            ?: data["TotalCmNum"]?.longValue()
+            ?: data["total"]?.longValue()
+            ?: comments.size.toLong()
+        val hasMore = list?.get("HasMore") ?: data["HasMore"]
+        val more = if (hasMore != null) hasMore.truthy()
+        else comments.isNotEmpty() && total > (page - 1L) * pageSize + comments.size
         return CommentPage(comments, total, more)
     }
+
+    /** 评论总数单独走 Count 服务，避免为显示数字拉一整页评论。 */
+    fun commentCount(songId: Long): Long? = runCatching {
+        if (songId <= 0) return null
+        val result = QqLibrary.musicu(
+            "music.globalComment.CommentCountSrv",
+            "GetCmCount",
+            buildJsonObject {
+                put("biz_id", songId.toString())
+                put("biz_type", 1)
+            },
+        )
+        if (result.code != 0 && result.code != 10000) return null
+        result.data?.get("response")?.jsonObject?.get("count")?.longValue()?.takeIf { it > 0 }
+    }.getOrNull()
 
     fun comments(songId: Long, latest: Boolean = false, page: Int = 1,
         pageSize: Int = 20, cookies: Map<String, String> = emptyMap(),
@@ -518,7 +599,7 @@ object QqExtras {
             cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             uin,
         ) ?: return CommentPage(emptyList(), 0, false)
-        commentPage(data)
+        commentPage(data, page, pageSize.coerceIn(1, 50))
     }.getOrDefault(CommentPage(emptyList(), 0, false))
 
     fun replies(rootCommentId: String, page: Int = 1, pageSize: Int = 20,
@@ -538,7 +619,7 @@ object QqExtras {
             cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
             uin,
         ) ?: return CommentPage(emptyList(), 0, false)
-        commentPage(data)
+        commentPage(data, page, pageSize.coerceIn(1, 50))
     }.getOrDefault(CommentPage(emptyList(), 0, false))
 
     fun sendComment(songId: Long, content: String, repliedCommentId: String?,

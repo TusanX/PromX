@@ -189,7 +189,10 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         val mid = song.externalIds.qqMusicId ?: return@LaunchedEffect
         val qq = vm.container.qqSession.takeIf { it.loggedIn }
         qqMvInfo = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            io.github.currencortex.music.core.alt.QqExtras.mv(
+            song.externalIds.qqNumericId?.toLongOrNull()?.let { numericId ->
+                io.github.currencortex.music.core.alt.QqExtras.mvBySongId(
+                    numericId, qq?.cookies.orEmpty(), qq?.uin.orEmpty().ifBlank { "0" })
+            } ?: io.github.currencortex.music.core.alt.QqExtras.mv(
                 mid, qq?.cookies.orEmpty(), qq?.uin.orEmpty().ifBlank { "0" })
         }
     }

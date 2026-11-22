@@ -6,9 +6,11 @@ package io.github.currencortex.music.feature.lyrics.data
 import io.github.currencortex.music.feature.lyrics.model.LyricsDocument
 import io.github.currencortex.music.feature.lyrics.parser.LyricsParser
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
 import okhttp3.*
@@ -83,7 +85,38 @@ class QqLyricsMatchSource(client: OkHttpClient = OkHttpClient(), baseUrl: String
         if (!TIMESTAMP.containsMatchIn(main)) {
             throw LyricsMatchException("QQ 音乐未提供可用的时间轴歌词，请切换其他来源")
         }
-        val translation = decodeTrack(root.string("trans"))
+        var translation = decodeTrack(root.string("trans"))
+        if (translation.isBlank()) {
+            // The legacy lyric endpoint often omits translations. Folia fills that gap with
+            // PlayLyricInfo; crypt=0 keeps the translated LRC readable as base64.
+            val fallback = withContext(Dispatchers.IO) {
+                runCatching {
+                    io.github.currencortex.music.core.alt.QqLibrary.musicuData(
+                        "music.musichallSong.PlayLyricInfo",
+                        "GetPlayLyricInfo",
+                        buildJsonObject {
+                            put("songMID", candidate.id)
+                            put("songName", "")
+                            put("singerName", "")
+                            put("albumName", "")
+                            put("interval", 0)
+                            put("crypt", 0)
+                            put("ct", 19)
+                            put("cv", 2111)
+                            put("lrc_t", 0)
+                            put("qrc", 0)
+                            put("qrc_t", 0)
+                            put("roma", 0)
+                            put("roma_t", 0)
+                            put("trans", 1)
+                            put("trans_t", 0)
+                            put("type", 0)
+                        },
+                    )?.get("trans")?.jsonPrimitive?.contentOrNull
+                }.getOrNull()
+            }
+            translation = decodeTrack(fallback.orEmpty())
+        }
         val romanization = decodeTrack(root.string("roma").ifBlank { root.string("romalrc") })
         val parsed = LyricsParser.parse(buildJsonObject {
             put("lrc", main); put("tlyric", translation); put("romalrc", romanization)

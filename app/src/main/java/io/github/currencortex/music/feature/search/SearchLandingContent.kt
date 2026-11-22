@@ -90,7 +90,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             LazyRow(Modifier.fillMaxWidth().testTag("search_rankings"), state = carousel,
                 flingBehavior = rememberSnapFlingBehavior(carousel), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (source != MusicSource.NETEASE) item(key = "source_hot") {
-                    val label = if (source == MusicSource.QQ_MUSIC) "QQ 热歌" else "B站推荐"
+                    val label = if (source == MusicSource.QQ_MUSIC) "QQ 推荐" else "B站推荐"
                     SearchRankingCard(label, "来自当前音乐来源", Modifier.width(cardWidth).testTag("search_source_rankings")) {
                         if (recommendations.isEmpty()) {
                             Text("回到首页刷新推荐后再来搜索", fontSize = 13.sp, color = colors.onSurface.copy(alpha = .5f))

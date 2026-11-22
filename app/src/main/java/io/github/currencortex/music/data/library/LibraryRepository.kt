@@ -79,25 +79,35 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
             io.github.currencortex.music.data.song.MusicSource.BILIBILI -> {
                 val modeNow = sourceOf()
-                fun fetchDaily() = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
-                    io.github.currencortex.music.core.alt.AltRecommend.qqHot(24)
+                fun fetchDaily(): List<Song> = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+                    val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+                    val tracks = if (qq != null) io.github.currencortex.music.core.alt.QqLibrary.dailyRecommendations(
+                        qq.cookies, qq.uin) else emptyList()
+                    if (tracks.isNotEmpty()) tracks.map(::qqSong)
+                    else io.github.currencortex.music.core.alt.AltRecommend.qqHot(24).map(::trackSong)
                 } else {
                     val cookie = biliSession?.invoke()?.let { if (it.loggedIn) it.cookieHeader() else "" } ?: ""
                     io.github.currencortex.music.core.alt.AltRecommend.bilibiliRcmd(cookie)
                         .ifEmpty { io.github.currencortex.music.core.alt.AltRecommend.bilibiliHot() }
+                        .map(::trackSong)
                 }
-                fun fetchForYou() = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
-                    io.github.currencortex.music.core.alt.AltRecommend.qqNew(24)
-                else io.github.currencortex.music.core.alt.AltRecommend.bilibiliHot(24)
-                var dailyTracks = withContext(Dispatchers.IO) { fetchDaily() }
-                if (dailyTracks.isEmpty()) {
+                fun fetchForYou(): List<Song> = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+                    val tracks = qqSession?.invoke()?.takeIf { it.loggedIn }?.let { qq ->
+                        io.github.currencortex.music.core.alt.QqLibrary.guessYouLike(qq.cookies, qq.uin)
+                    }.orEmpty()
+                    if (tracks.isNotEmpty()) tracks.map(::qqSong)
+                    else io.github.currencortex.music.core.alt.AltRecommend.qqNew(24).map(::trackSong)
+                } else io.github.currencortex.music.core.alt.AltRecommend.bilibiliHot(24).map(::trackSong)
+                var dailySongs = withContext(Dispatchers.IO) { fetchDaily() }
+                if (dailySongs.isEmpty()) {
                     // 首屏网络未就绪时会拿空结果；重试一次，避免把空结果缓存住
                     delay(700)
-                    dailyTracks = withContext(Dispatchers.IO) { fetchDaily() }
+                    dailySongs = withContext(Dispatchers.IO) { fetchDaily() }
                 }
                 val discovery = withContext(Dispatchers.IO) { fetchForYou() }
-                val songs = dailyTracks.map(::trackSong)
-                val forYou = (discovery + dailyTracks).distinctBy { "${it.source}:${it.id}" }.take(24).map(::trackSong)
+                fun Song.identity() = "${musicSource}:${externalIds.qqMusicId ?: externalIds.bilibiliBvid ?: id}"
+                val songs = dailySongs.distinctBy { it.identity() }
+                val forYou = (discovery + dailySongs).distinctBy { it.identity() }.take(24)
                 return@backgroundRead Daily(songs, if (forYou.isEmpty()) songs else forYou, emptyList())
             }
             else -> Unit
@@ -129,6 +139,13 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                     musicSource = io.github.currencortex.music.data.song.MusicSource.BILIBILI,
                     externalIds = io.github.currencortex.music.data.song.SongExternalIds(bilibiliBvid = item.bvid),
                 )
+            }
+        }
+        if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+            val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: return emptyList()
+            return withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.weeklyListening(qq.cookies, qq.uin)
+                    .map(::qqSong)
             }
         }
         // 非网易云模式：最近播放取本机记录里属于该模式的曲目

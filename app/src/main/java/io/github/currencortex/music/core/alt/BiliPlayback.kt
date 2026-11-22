@@ -185,7 +185,7 @@ object BiliPlayback {
             audios.forEach { el ->
                 val o = el.jsonObject
                 (o["baseUrl"] ?: o["base_url"])?.jsonPrimitive?.content?.let { candidates.add(it) }
-                o["backupUrl"]?.jsonArray?.forEach { b -> b.jsonPrimitive.content?.let { candidates.add(it) } }
+                o["backupUrl"]?.jsonArray?.forEach { b -> candidates.add(b.jsonPrimitive.content) }
             }
         }
         runCatching {
@@ -403,21 +403,24 @@ object BiliPlayback {
     }
 
     data class Comment(val id: String, val user: String, val avatar: String, val content: String,
-                       val likes: Long, val timeSec: Long, val level: Int = 0)
+                       val likes: Long, val timeSec: Long, val level: Int = 0,
+                       val userId: Long = 0, val likedByMe: Boolean = false, val replyCount: Int = 0)
+    data class CommentPage(val comments: List<Comment>, val total: Long, val more: Boolean,
+        val nextCursor: String? = null)
 
-    /** 评论：type=1 视频，oid=aid；sort=2 按热度，sort=0 按时间 */
-    fun comments(aid: String, hot: Boolean, page: Int = 1, size: Int = 20, cookie: String = ""): List<Comment> = runCatching {
-        val sort = if (hot) 2 else 0
-        val body = get("https://api.bilibili.com/x/v2/reply?type=1&oid=$aid&sort=$sort&ps=$size&pn=$page", cookie)
+    private fun commentPage(body: String, page: Int, size: Int): CommentPage {
         val root = kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject
-        val replies = root["data"]?.jsonObject?.get("replies")?.jsonArray ?: return emptyList()
-        replies.mapNotNull { el ->
+        if (root["code"]?.jsonPrimitive?.content?.toIntOrNull()?.let { it != 0 } == true)
+            return CommentPage(emptyList(), 0, false)
+        val data = root["data"]?.jsonObject ?: return CommentPage(emptyList(), 0, false)
+        val replies = data["replies"]?.jsonArray.orEmpty()
+        val comments = replies.mapNotNull { el ->
             val o = el.jsonObject
             val content = o["content"]?.jsonObject?.get("message")?.jsonPrimitive?.content
                 ?: return@mapNotNull null
             val member = o["member"]?.jsonObject
             Comment(
-                id = o["rpid"]?.jsonPrimitive?.content ?: "",
+                id = o["rpid"]?.jsonPrimitive?.content ?: o["rpid_str"]?.jsonPrimitive?.content.orEmpty(),
                 user = member?.get("uname")?.jsonPrimitive?.content ?: "B站用户",
                 avatar = (member?.get("avatar")?.jsonPrimitive?.content ?: "")
                     .let { if (it.startsWith("//")) "https:$it" else it },
@@ -426,7 +429,93 @@ object BiliPlayback {
                 timeSec = o["ctime"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
                 level = member?.get("level_info")?.jsonObject?.get("current_level")
                     ?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                userId = member?.get("mid")?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+                likedByMe = o["action"]?.jsonPrimitive?.content?.toIntOrNull() == 1,
+                replyCount = o["rcount"]?.jsonPrimitive?.content?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             )
         }
-    }.getOrDefault(emptyList())
+        val cursor = data["cursor"]?.jsonObject
+        if (cursor != null) {
+            val next = cursor["next"]?.jsonPrimitive?.content?.toLongOrNull()
+            val hasMore = cursor["is_end"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() == false &&
+                next != null && next > 0
+            return CommentPage(comments,
+                cursor["all_count"]?.jsonPrimitive?.content?.toLongOrNull() ?: comments.size.toLong(),
+                hasMore, next?.toString())
+        }
+        val pageInfo = data["page"]?.jsonObject
+        val total = pageInfo?.get("count")?.jsonPrimitive?.content?.toLongOrNull()
+            ?: data["page"]?.jsonObject?.get("acount")?.jsonPrimitive?.content?.toLongOrNull()
+            ?: comments.size.toLong()
+        val more = replies.isNotEmpty() && (page * size < total || replies.size >= size)
+        return CommentPage(comments, total, more, if (more) (page + 1).toString() else null)
+    }
+
+    /** 评论：type=1 视频，oid=aid；sort=2 按热度，sort=0 按时间。 */
+    fun comments(aid: String, hot: Boolean, page: Int = 1, size: Int = 20, cookie: String = ""): CommentPage = runCatching {
+        val offset = if (page <= 1) "" else page.toString()
+        val params = mapOf(
+            "oid" to aid,
+            "type" to "1",
+            "mode" to if (hot) "3" else "2",
+            "pagination_str" to "{\"offset\":\"$offset\"}",
+            "plat" to "1",
+            "web_location" to "1315875",
+        )
+        val modern = BiliWbi.get("/x/v2/reply/wbi/main", params, cookie)
+        if (!modern.isNullOrBlank()) {
+            val result = commentPage(modern, page, size)
+            if (result.total > 0 || result.comments.isNotEmpty()) return result
+        }
+        val sort = if (hot) 2 else 0
+        val body = get("https://api.bilibili.com/x/v2/reply?type=1&oid=$aid&sort=$sort&ps=$size&pn=$page", cookie)
+        commentPage(body, page, size)
+    }.getOrDefault(CommentPage(emptyList(), 0, false))
+
+    fun replies(aid: String, rootId: String, page: Int = 1, size: Int = 20,
+        cookie: String = ""): CommentPage = runCatching {
+        val body = get("https://api.bilibili.com/x/v2/reply/reply?type=1&oid=$aid" +
+            "&root=$rootId&ps=$size&pn=$page", cookie)
+        commentPage(body, page, size)
+    }.getOrDefault(CommentPage(emptyList(), 0, false))
+
+    private fun postComment(path: String, cookie: String, csrf: String, fields: Map<String, String>): Boolean =
+        runCatching {
+            val connection = (URL("https://api.bilibili.com$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("User-Agent", UA)
+                setRequestProperty("Referer", "https://www.bilibili.com/")
+                if (cookie.isNotBlank()) setRequestProperty("Cookie", cookie)
+                setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            }
+            val body = (fields + ("csrf" to csrf)).entries.joinToString("&") { (key, value) ->
+                "${java.net.URLEncoder.encode(key, "UTF-8")}=${java.net.URLEncoder.encode(value, "UTF-8")}"
+            }
+            connection.outputStream.use { it.write(body.toByteArray()) }
+            val text = connection.inputStream.bufferedReader().use { it.readText() }
+            kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject["code"]
+                ?.jsonPrimitive?.content?.toIntOrNull() == 0
+        }.getOrDefault(false)
+
+    fun sendComment(aid: String, content: String, replyTo: String?, cookie: String, csrf: String): Boolean {
+        if (cookie.isBlank() || csrf.isBlank()) return false
+        val fields = linkedMapOf(
+            "oid" to aid,
+            "type" to "1",
+            "message" to content,
+            "plat" to "1",
+        )
+        if (!replyTo.isNullOrBlank()) {
+            fields["root"] = replyTo
+            fields["parent"] = replyTo
+        }
+        return postComment("/x/v2/reply/add", cookie, csrf, fields)
+    }
+
+    fun deleteComment(aid: String, rpid: String, cookie: String, csrf: String): Boolean {
+        if (cookie.isBlank() || csrf.isBlank()) return false
+        return postComment("/x/v2/reply/del", cookie, csrf,
+            linkedMapOf("oid" to aid, "type" to "1", "rpid" to rpid))
+    }
 }

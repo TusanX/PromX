@@ -79,7 +79,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     val colors = MiuixTheme.colorScheme
     val qq = source == MusicSource.QQ_MUSIC
     val regular = if (qq) listOf(AudioQuality.STANDARD, AudioQuality.HIGHER,
-        AudioQuality.EXHIGH, AudioQuality.LOSSLESS)
+        AudioQuality.EXHIGH, AudioQuality.LOSSLESS, AudioQuality.JYMASTER,
+        AudioQuality.SKY, AudioQuality.DOLBY, AudioQuality.VIVID)
     else AudioQuality.entries.filter { it !in setOf(AudioQuality.AUTO, AudioQuality.SKY, AudioQuality.JYMASTER) }
     // This is a fixed, short list. Compose it before the native entrance starts instead of
     // subcomposing every text row during the first animated layout pass.
@@ -196,7 +197,11 @@ internal fun qualityLabelFor(source: MusicSource, quality: AudioQuality): String
         AudioQuality.STANDARD -> "流畅"
         AudioQuality.HIGHER -> "标准"
         AudioQuality.EXHIGH -> "高品质"
-        AudioQuality.LOSSLESS -> "无损"
+        AudioQuality.LOSSLESS -> "SQ 无损"
+        AudioQuality.JYMASTER -> "臻品母带"
+        AudioQuality.SKY -> "臻品全景声"
+        AudioQuality.DOLBY -> "杜比全景声"
+        AudioQuality.VIVID -> "臻品音质"
         else -> quality.label
     }
 
@@ -206,7 +211,11 @@ private fun qualityDescriptionFor(source: MusicSource, quality: AudioQuality): S
         AudioQuality.STANDARD -> "流畅 AAC，优先节省流量"
         AudioQuality.HIGHER -> "标准 MP3，适合日常播放"
         AudioQuality.EXHIGH -> "高品质 320K MP3"
-        AudioQuality.LOSSLESS -> "无损 FLAC，需歌曲与账号支持"
+        AudioQuality.LOSSLESS -> "SQ 无损 FLAC"
+        AudioQuality.JYMASTER -> "臻品母带 FLAC，需歌曲与账号支持"
+        AudioQuality.SKY -> "臻品全景声音源，需歌曲与账号支持"
+        AudioQuality.DOLBY -> "杜比全景声，需歌曲与账号支持"
+        AudioQuality.VIVID -> "臻品音质音源，需歌曲与账号支持"
         else -> "QQ 音乐音质档位"
     }
 
