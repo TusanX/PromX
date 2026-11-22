@@ -29,7 +29,7 @@ Unified search, playlists, synchronized lyrics, audio effects and listening toge
 <a href="https://github.com/TusanX/PromX/releases/latest"><img src="https://img.shields.io/badge/Download_PromX_APK-111111?style=for-the-badge&logo=android&logoColor=white" alt="Download PromX APK"></a>
 <a href="https://github.com/TusanX/PromX/issues"><img src="https://img.shields.io/badge/Report_an_Issue-555555?style=for-the-badge&logo=github&logoColor=white" alt="Report an issue"></a>
 
-<sub>Latest signed release: 1.5.4 · Android 8.0 / API 26 or newer</sub>
+<sub>Latest signed release: 1.5.5 · Android 8.0 / API 26 or newer</sub>
 
 </div>
 
@@ -144,7 +144,7 @@ PromX 是一个使用 Kotlin、Jetpack Compose 与 Miuix 构建的原生 Android
   <img src=".github/img/promx-settings.png" width="240" alt="PromX settings">
 </p>
 
-<p align="center"><sub>♪ Current 1.5.4 build on Android 16 · 界面截图与当前安装版本一致 ♪</sub></p>
+<p align="center"><sub>♪ Current 1.5.5 build on Android 16 · 界面截图与当前安装版本一致 ♪</sub></p>
 
 ## Supported sources 🎚️
 
