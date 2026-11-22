@@ -24,6 +24,7 @@ object QqLibrary {
         val durationMs: Long,
         val mediaId: String = mid,
         val numericId: Long? = null,
+        val mvVid: String? = null,
     )
 
     private fun get(url: String, cookie: String): String {
@@ -337,6 +338,8 @@ object QqLibrary {
                 ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid,
             numericId = listOf("id", "songid")
                 .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.longOrNull },
+            mvVid = o["mv"]?.jsonObject?.get("vid")?.jsonPrimitive?.contentOrNull
+                ?: o["vid"]?.jsonPrimitive?.contentOrNull,
         )
     }
 

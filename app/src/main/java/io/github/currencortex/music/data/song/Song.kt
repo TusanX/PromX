@@ -20,7 +20,7 @@ import kotlinx.serialization.SerialName
 @Serializable data class SongExternalIds(val neteaseId: String? = null, val qqMusicId: String? = null,
     val qqMediaId: String? = null,
     val bilibiliBvid: String? = null, val bilibiliCid: String? = null, val qqNumericId: String? = null,
-    val appleMusicId: String? = null, val spotifyId: String? = null)
+    val appleMusicId: String? = null, val spotifyId: String? = null, val qqMvVid: String? = null)
 @Serializable data class LyricContextDto(val t: Long? = null, val txt: String = "", val matched: Boolean = false)
 @Serializable data class SongDto(@SerialName("ncm_id") val id: Long, val name: String, val artists: String = "",
                                 val album: String = "", val pic: String = "", val duration: Long = 0, val mv: Long = 0,

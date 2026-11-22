@@ -52,7 +52,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                 musicSource = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
                 externalIds = io.github.currencortex.music.data.song.SongExternalIds(
                     qqMusicId = t.id, qqMediaId = t.mediaId.takeIf(String::isNotBlank),
-                    qqNumericId = t.extra.ifBlank { null }))
+                    qqNumericId = t.extra.ifBlank { null }, qqMvVid = t.mvVid))
         }
     }
 
@@ -69,6 +69,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                 qqMusicId = track.mid,
                 qqMediaId = track.mediaId.takeIf(String::isNotBlank),
                 qqNumericId = track.numericId?.toString(),
+                qqMvVid = track.mvVid,
             ),
         )
 

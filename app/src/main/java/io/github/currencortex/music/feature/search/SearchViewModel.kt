@@ -269,7 +269,9 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
                             qqMusicId = mid,
                             qqMediaId = o["media_mid"]?.jsonPrimitive?.contentOrNull
                                 ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull,
-                            qqNumericId = o["songid"]?.jsonPrimitive?.content))
+                            qqNumericId = o["songid"]?.jsonPrimitive?.content,
+                            qqMvVid = o["vid"]?.jsonPrimitive?.contentOrNull
+                                ?: o["mv"]?.jsonObject?.get("vid")?.jsonPrimitive?.contentOrNull))
                 }
             }
         }.getOrDefault(emptyList())

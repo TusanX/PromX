@@ -20,6 +20,7 @@ data class AltTrack(
     val cover: String,
     val extra: String = "",  // B站 cid / QQ albummid
     val mediaId: String = id, // QQ 的 media_mid；取流文件名必须使用它
+    val mvVid: String? = null,
 )
 
 enum class AltSource(val label: String) { BILIBILI("哔哩哔哩"), QQ("QQ音乐") }
@@ -328,6 +329,59 @@ object QqExtras {
         exact?.jsonObject?.get("songid")?.jsonPrimitive?.contentOrNull?.toLongOrNull()
     }.getOrNull()
 
+    data class MvInfo(val id: Long, val vid: String, val title: String, val cover: String,
+        val durationMs: Long)
+    data class MvStream(val url: String, val referer: String = "https://y.qq.com/")
+
+    /** 旧队列没有二维码 MV 信息时，用 songmid 回查一次。 */
+    fun mv(songmid: String, cookies: Map<String, String>, uin: String): MvInfo? = runCatching {
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val info = QqLibrary.musicuData(
+            "MvService.MvInfoProServer",
+            "GetMvBySongid",
+            buildJsonObject { putJsonArray("mids") { add(songmid) } },
+            cookie,
+            uin,
+        )?.get("mvinfo")?.jsonObject?.get(songmid)?.jsonObject ?: return null
+        val vid = info["vid"]?.jsonPrimitive?.contentOrNull ?: return null
+        MvInfo(
+            id = info["mvid"]?.jsonPrimitive?.longOrNull ?: 0,
+            vid = vid,
+            title = info["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            cover = info["picurl"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                .replace("http://", "https://"),
+            durationMs = (info["duration"]?.jsonPrimitive?.longOrNull ?: 0L) * 1000,
+        )
+    }.getOrNull()
+
+    /** 腾讯视频公开播放信息，返回可直接交给 Media3 的 MP4 地址。 */
+    fun mvStream(vid: String, cookies: Map<String, String>, uin: String,
+        defn: String = "shd"): MvStream? = runCatching {
+        if (vid.isBlank()) return null
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val url = "https://vv.video.qq.com/getinfo?vids=" +
+            java.net.URLEncoder.encode(vid, "UTF-8") +
+            "&platform=101001&otype=json&defn=${java.net.URLEncoder.encode(defn, "UTF-8")}" +
+            "&charge=0&tz=GMT%2B8"
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13)")
+        connection.setRequestProperty("Referer", "https://y.qq.com/")
+        if (cookie.isNotBlank()) connection.setRequestProperty("Cookie", cookie)
+        connection.connectTimeout = 12_000
+        connection.readTimeout = 15_000
+        val body = connection.inputStream.bufferedReader().use { it.readText() }
+            .trim().removePrefix("QZOutputJson=").removeSuffix(";")
+        val root = Json.parseToJsonElement(body).jsonObject
+        val video = root["vl"]?.jsonObject?.get("vi")?.jsonArray?.firstOrNull()?.jsonObject ?: return null
+        val base = video["ul"]?.jsonObject?.get("ui")?.jsonArray.orEmpty()
+            .firstNotNullOfOrNull { it.jsonObject["url"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf(String::isNotBlank) } ?: return null
+        val filename = video["fn"]?.jsonPrimitive?.contentOrNull ?: return null
+        val vkey = video["fvkey"]?.jsonPrimitive?.contentOrNull ?: return null
+        MvStream(base.replaceFirst("https://", "http://") + filename + "?vkey=" +
+            java.net.URLEncoder.encode(vkey, "UTF-8"))
+    }.getOrNull()
+
     private fun commentOf(el: JsonElement): Comment? = runCatching {
         val o = el.jsonObject
         val id = o["CmId"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -555,7 +609,9 @@ object AltRecommend {
                 if (album.isNotBlank()) "https://y.qq.com/music/photo_new/T002R300x300M000$album.jpg" else "",
                 extra = o["songid"]?.jsonPrimitive?.content ?: "",
                 mediaId = o["media_mid"]?.jsonPrimitive?.contentOrNull
-                    ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid)
+                    ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid,
+                mvVid = o["vid"]?.jsonPrimitive?.contentOrNull
+                    ?: o["mv"]?.jsonObject?.get("vid")?.jsonPrimitive?.contentOrNull)
         }
     }.getOrDefault(emptyList())
 

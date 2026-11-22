@@ -173,6 +173,76 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
     }
     LaunchedEffect(queue.current?.id) { biliVideo = false }
     var videoSpeed by remember { mutableStateOf(1f) }
+    var mvBackground by rememberSaveable(queue.current?.id) { mutableStateOf(false) }
+    var mvSource by remember(queue.current?.id) { mutableStateOf<PlayerMvSource?>(null) }
+    var mvLoading by remember(queue.current?.id) { mutableStateOf(false) }
+    var mvReturnPage by rememberSaveable(queue.current?.id) { mutableIntStateOf(PlayerContent.COVER.ordinal) }
+    var qqMvInfo by remember(queue.current?.id) {
+        mutableStateOf<io.github.currencortex.music.core.alt.QqExtras.MvInfo?>(null)
+    }
+    val currentSongForMv = queue.current
+    LaunchedEffect(currentSongForMv?.id, currentSongForMv?.musicSource) {
+        qqMvInfo = null
+        val song = currentSongForMv ?: return@LaunchedEffect
+        if (song.musicSource != io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC ||
+            !song.externalIds.qqMvVid.isNullOrBlank()) return@LaunchedEffect
+        val mid = song.externalIds.qqMusicId ?: return@LaunchedEffect
+        val qq = vm.container.qqSession.takeIf { it.loggedIn }
+        qqMvInfo = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.QqExtras.mv(
+                mid, qq?.cookies.orEmpty(), qq?.uin.orEmpty().ifBlank { "0" })
+        }
+    }
+    val qqMvVid = currentSongForMv?.externalIds?.qqMvVid?.takeIf(String::isNotBlank)
+        ?: qqMvInfo?.vid
+    val hasMvBackground = currentSongForMv?.let { song ->
+        when (song.musicSource) {
+            io.github.currencortex.music.data.song.MusicSource.NETEASE -> song.mv > 0
+            io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC -> !qqMvVid.isNullOrBlank()
+            else -> false
+        }
+    } == true
+    LaunchedEffect(mvBackground, currentSongForMv?.id, qqMvVid) {
+        if (!mvBackground) {
+            mvLoading = false
+            return@LaunchedEffect
+        }
+        val song = currentSongForMv ?: return@LaunchedEffect
+        mvSource = null
+        mvLoading = true
+        val resolved = runCatching {
+            when (song.musicSource) {
+                io.github.currencortex.music.data.song.MusicSource.NETEASE -> PlayerMvSource(
+                    vm.container.libraryRepository.mvSource(song.mv, 720), "https://music.163.com/")
+                io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC -> {
+                    val vid = qqMvVid ?: throw IllegalStateException("没有 MV 地址")
+                    val qq = vm.container.qqSession.takeIf { it.loggedIn }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        io.github.currencortex.music.core.alt.QqExtras.mvStream(
+                            vid, qq?.cookies.orEmpty(), qq?.uin.orEmpty().ifBlank { "0" })
+                    }?.let { PlayerMvSource(it.url, it.referer) }
+                        ?: throw IllegalStateException("MV 地址不可用")
+                }
+                else -> null
+            }
+        }.getOrNull()
+        mvLoading = false
+        if (resolved == null) {
+            mvBackground = false
+            scope.launch { pager.animateScrollToPage(mvReturnPage) }
+            vm.container.errorNotices.show("这首歌曲暂时无法加载 MV 背景")
+        } else mvSource = resolved
+    }
+    val toggleMvBackground: () -> Unit = {
+        if (!mvBackground) {
+            mvReturnPage = pager.currentPage
+            mvBackground = true
+            scope.launch { pager.animateScrollToPage(PlayerContent.LYRICS.ordinal) }
+        } else {
+            mvBackground = false
+            scope.launch { pager.animateScrollToPage(mvReturnPage) }
+        }
+    }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             // 离开播放页：无论如何都解除视频模式对音频的挂起
@@ -308,12 +378,10 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                 }, Modifier.testTag("player_bili_download"))
                 if (biliSong != null) PlayerIconButton(PlayerIcon.MORE,
                     "收藏到 B站 收藏夹", { biliFavoriteFor = biliSong.externalIds.bilibiliBvid }, Modifier.testTag("player_bili_favorite"))
-                // 原项目的 MV 能力：有 MV 的网易云歌曲直接进 lib/mv/<id>
-                if (queue.current?.musicSource == io.github.currencortex.music.data.song.MusicSource.NETEASE &&
-                    (queue.current?.mv ?: 0) > 0 && !widePlayer) {
-                    val mv = queue.current!!.mv
-                    PlayerIconButton(PlayerIcon.VIDEO, "播放 MV", { onAiNavigate("lib/mv/$mv") },
-                        Modifier.testTag("player_mv"))
+                if (hasMvBackground) {
+                    PlayerIconButton(PlayerIcon.VIDEO,
+                        if (mvBackground) "关闭 MV 背景" else "显示 MV 背景", toggleMvBackground,
+                        Modifier.testTag("player_mv_background"), selected = mvBackground, loading = mvLoading)
                 }
                 PlayerIconButton(PlayerIcon.SHARE, "分享歌曲", { overlay = PlayerOverlay.SHARE }, Modifier.testTag("player_share"),
                     enabled = queue.current != null)
@@ -340,17 +408,32 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                 }
             }) {
         PlayerBackdrop(queue.current?.cover.orEmpty(), Modifier.matchParentSize(), backgroundImage, appearance.playerBackgroundBlur,
-            active = expanded && !sidePage.active, dynamicBackground = appearance.playerDynamicBackground,
+            active = expanded && !sidePage.active && !mvBackground, dynamicBackground = appearance.playerDynamicBackground,
             motionSpeed = { backgroundSpeed.value })
+        AnimatedVisibility(visible = mvBackground && mvSource != null,
+            enter = fadeIn(tween(520)), exit = fadeOut(tween(320)),
+            modifier = Modifier.matchParentSize()) {
+            mvSource?.let { source -> PlayerMvBackdrop(
+                source = source, playing = state.showPause,
+                active = expanded && !sidePage.active,
+                positionMs = state.positionMs, timelineRevision = state.timelineRevision,
+                onError = { message ->
+                    mvBackground = false; mvSource = null
+                    scope.launch { pager.animateScrollToPage(mvReturnPage) }
+                    vm.container.errorNotices.show(message)
+                },
+                modifier = Modifier.matchParentSize(),
+            ) }
+        }
         // The artwork viewport uses light ink; dialogs below inherit the app appearance.
         MiuixTheme(controller = remember { ThemeController(colorSchemeMode = ColorSchemeMode.Dark, isDark = true, darkColors = colors) }) {
         CompositionLocalProvider(LocalIndication provides indication) {
         CompositionLocalProvider(LocalPlayerPagerArtwork provides pagerArtwork) {
         Box(Modifier.fillMaxSize().onGloballyPositioned { pagerArtwork.root = it; pagerArtwork.updateBounds() }) {
-        if (immersiveCover && !widePlayer) PlayerPagerArtwork(pagerArtwork, queue.current, drawText = false)
+        if (immersiveCover && !widePlayer && !mvBackground) PlayerPagerArtwork(pagerArtwork, queue.current, drawText = false)
         Box(Modifier.fillMaxSize().graphicsLayer { translationY = -size.height * queueMotion.progress }
             .onGloballyPositioned { pagerArtwork.mainPage = it; pagerArtwork.updateBounds() }) {
-        if (widePlayer && immersiveCover) PlayerImmersiveCover(queue.current?.cover.orEmpty(),
+        if (widePlayer && immersiveCover && !mvBackground) PlayerImmersiveCover(queue.current?.cover.orEmpty(),
             Modifier.fillMaxSize().testTag("player_wide_immersive_cover"), bounds = { null }, radius = { 0f },
             immersion = { 1f }, alpha = { playerSheetContentAlpha(sheetProgress()) }, wideViewport = true)
         Column(Modifier.fillMaxSize()
@@ -371,11 +454,11 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                     Box(Modifier.fillMaxSize().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
                         Row(Modifier.size(stageWidth, stageHeight).testTag("player_wide_stage"),
                             horizontalArrangement = Arrangement.spacedBy(40.dp), verticalAlignment = Alignment.CenterVertically) {
-                            WideCoverContent(vm, Modifier.weight(1f).fillMaxHeight(), immersiveCover, expand = expansion)
+                            WideCoverContent(vm, Modifier.weight(1f).fillMaxHeight(), immersiveCover || mvBackground, expand = expansion)
                             HorizontalPager(pager, Modifier.weight(1f).fillMaxHeight().testTag("player_wide_pager")
                                 .semantics { this[PlayerPagePosition] = pager.currentPage + pager.currentPageOffsetFraction },
                                 beyondViewportPageCount = 1,
-                                userScrollEnabled = expanded && !sidePage.active && sheetDrag?.state?.dragging != true,
+                                userScrollEnabled = expanded && !sidePage.active && !mvBackground && sheetDrag?.state?.dragging != true,
                                 flingBehavior = PagerDefaults.flingBehavior(pager,
                                     snapAnimationSpec = tween(240, easing = LinearOutSlowInEasing))) { page ->
                                 Box(Modifier.fillMaxSize().then(if (pager.currentPage != page && !pager.isScrollInProgress)
@@ -391,14 +474,19 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                             }
                         }
                     }
-                    PlayerIconButton(PlayerIcon.MORE, "播放与歌词设置", { overlay = PlayerOverlay.OPTIONS },
-                        Modifier.align(Alignment.TopEnd).testTag("lyrics_options"))
+                    Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) {
+                        if (hasMvBackground) PlayerIconButton(PlayerIcon.VIDEO,
+                            if (mvBackground) "关闭 MV 背景" else "显示 MV 背景", toggleMvBackground,
+                            Modifier.testTag("player_wide_mv_background"), selected = mvBackground, loading = mvLoading)
+                        PlayerIconButton(PlayerIcon.MORE, "播放与歌词设置", { overlay = PlayerOverlay.OPTIONS },
+                            Modifier.testTag("lyrics_options"))
+                    }
                 } else Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { pagerArtwork.container = it; pagerArtwork.updateBounds() }) {
                     HorizontalPager(pager, Modifier.fillMaxSize().testTag("player_content_pager")
                         .semantics { this[PlayerPagePosition] = pager.currentPage + pager.currentPageOffsetFraction },
                         beyondViewportPageCount = 1,
-                        userScrollEnabled = expanded && (!sidePage.active || sidePage.pagerDragging) && sheetDrag?.state?.dragging != true,
+                        userScrollEnabled = expanded && !mvBackground && (!sidePage.active || sidePage.pagerDragging) && sheetDrag?.state?.dragging != true,
                         overscrollEffect = null,
                         flingBehavior = PagerDefaults.flingBehavior(pager, snapAnimationSpec = tween(240, easing = LinearOutSlowInEasing))) { page ->
                         Box(Modifier.fillMaxSize()
@@ -466,7 +554,7 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         if (queueGesture || overlay == PlayerOverlay.QUEUE)
             PlaybackQueuePage(vm, queueMotion, false, "player_queue_sheet", dismiss, actions)
         if (!widePlayer && (!roaming.active || roaming.choice.code != "PUZZLE_MODE_RCMD"))
-            if (immersiveCover) PlayerPagerSongText(pagerArtwork) else PlayerPagerArtwork(pagerArtwork, queue.current)
+            if (immersiveCover && !mvBackground) PlayerPagerSongText(pagerArtwork) else if (!mvBackground) PlayerPagerArtwork(pagerArtwork, queue.current)
         }
         }
         }
