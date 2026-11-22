@@ -278,7 +278,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         Box(Modifier.fillMaxSize().musicRefreshRate(settings.refreshRate)) {
         var selected by rememberSaveable { mutableIntStateOf(HOME_TAB) }
         var sourcePickerOpen by rememberSaveable { mutableStateOf(false) }
-        val discoverPager = androidx.compose.foundation.pager.rememberPagerState { 4 }
+        val discoverPager = androidx.compose.foundation.pager.rememberPagerState { 2 }
         var startupRouted by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(container) {
             if (!startupRouted) {
@@ -323,12 +323,11 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
 
         val density = LocalDensity.current
         val rootPage = sceneStack.last() == ROOT.toString() && !searchPresented
-        val hideDockForChat = rootPage && selected == DISCOVER_TAB && discoverPager.targetPage == 3
         val imeInsets = WindowInsets.ime
         val keyboardOpen by remember(imeInsets, density) { derivedStateOf { imeInsets.getBottom(density) > 0 } }
         val miniRetainedAvailable = currentSong != null || playerState.mode == PlayerMode.ROOM
         val miniAvailable = !keyboardOpen && miniRetainedAvailable
-        val showMini = miniAvailable && !hideDockForChat && !playerPresented && sceneStack.last() !in setOf("lib/video", "appearance-font") &&
+        val showMini = miniAvailable && !playerPresented && sceneStack.last() !in setOf("lib/video", "appearance-font") &&
             !(settings.playlistRecordShelf && isPlaylistRoute(sceneStack.last()))
         PreloadMusicCovers(listOf(currentSong?.cover.orEmpty()), 800)
         LaunchedEffect(sessionRevision) { songMenu = null; roomPending = emptySet() }
@@ -489,16 +488,16 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
             .onGloballyPositioned { navigationBounds = it.boundsInRoot() }) {
         val wideLayout = maxWidth >= 700.dp
         val rootWide = rootPage && wideLayout
-        val showRootNavigation = rootPage && !playerPresented && (!hideDockForChat || wideLayout)
+        val showRootNavigation = rootPage && !playerPresented
         val embyDock = embyNavigation.takeIf { backStack.lastOrNull { it != PLAYER.toString() } == "emby" }
         val hasEmbyDock = embyDock != null
         val dockSelected = embyDock?.selected ?: selected
         val dockLabels = if (hasEmbyDock) io.github.currencortex.music.feature.emby.EmbyNavigation.labels else labels
         val dockIcons = if (hasEmbyDock) io.github.currencortex.music.feature.emby.EmbyNavigation.icons else icons
         val dockSelect: (Int) -> Unit = embyDock?.onSelect ?: ::selectTab
-        val dockPage = if (hasEmbyDock) 100 + dockSelected else selected * 4 + if (selected == DISCOVER_TAB) discoverPager.targetPage else 0
+        val dockPage = if (hasEmbyDock) 100 + dockSelected else selected * 2 + if (selected == DISCOVER_TAB) discoverPager.targetPage else 0
         val dockScroll = rememberRootDockScrollBehavior(dockPage, miniRetainedAvailable,
-            enabled = (rootPage || hasEmbyDock) && !hideDockForChat && !playerPresented && !miniQueueOpen && miniAvailable && !wideLayout)
+            enabled = (rootPage || hasEmbyDock) && !playerPresented && !miniQueueOpen && miniAvailable && !wideLayout)
         val dockCollapsed = miniRetainedAvailable && !wideLayout && dockScroll.collapsed
         // Reserve page space once. Animate only the overlay's GPU translation, never the page height.
         val miniRoot = backStack.lastOrNull { it != PLAYER.toString() } == ROOT.toString()
@@ -575,11 +574,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                                         val query = searchVm.state.value.query
                                         if (query.isNotBlank()) { searchVm.search(query); searchFocus = false }
                                     })
-                                DISCOVER_TAB -> CompositionLocalProvider(
-                                    LocalMusicBottomInset provides if (discoverPager.targetPage == 3) 0.dp else scrollBottom,
-                                    LocalMusicComposerBottomInset provides if (discoverPager.targetPage == 3) 0.dp else composerBottom) {
-                                    DiscoverScreen(discoverVm, discoverPager, ::navigateLibrary)
-                                }
+                                DISCOVER_TAB -> DiscoverScreen(discoverVm, discoverPager, ::navigateLibrary)
                                 ME_TAB -> MeScreen(profileVm, authVm, ::navigateLibrary, { selectTab(SETTINGS_TAB) },
                                     play = { songs, index -> playWithPermission { container.playerController.playList(songs, index) } })
                                 SETTINGS_TAB -> SettingsScreen(
@@ -862,8 +857,8 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         val page: @Composable () -> Unit = {
             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides pageBackOwner) { pageContent() }
         }
-        val dockVisible by remember(keyboardOpen, sceneStack, settings.playlistRecordShelf, hideDockForChat) { derivedStateOf {
-            !hideDockForChat && sceneStack.last() !in setOf("lib/video", "appearance-font") && playerExpansion.value < .9999f &&
+        val dockVisible by remember(keyboardOpen, sceneStack, settings.playlistRecordShelf) { derivedStateOf {
+            sceneStack.last() !in setOf("lib/video", "appearance-font") && playerExpansion.value < .9999f &&
                 !(settings.playlistRecordShelf && isPlaylistRoute(sceneStack.last()))
         } }
         val miniOverlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {

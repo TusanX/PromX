@@ -19,30 +19,26 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.*
 
 @Composable fun DiscoverScreen(vm: DiscoverViewModel, navigate: (String) -> Unit) {
-    DiscoverScreen(vm, rememberPagerState { 4 }, navigate)
+    DiscoverScreen(vm, rememberPagerState { 2 }, navigate)
 }
 
 @Composable fun DiscoverScreen(vm: DiscoverViewModel,
     pager: androidx.compose.foundation.pager.PagerState, navigate: (String) -> Unit) {
     val scope = rememberCoroutineScope()
-    val posts: PostsViewModel = viewModel(factory = viewModelFactory { PostsViewModel(vm.container) })
-    val chat: ChatViewModel = viewModel(factory = viewModelFactory { ChatViewModel(vm.container) })
-    LaunchedEffect(pager.settledPage) { if (pager.settledPage == 2) posts.ensureLoaded() }
+    val following: FollowingViewModel = viewModel(factory = viewModelFactory { FollowingViewModel(vm.container) })
     SettingsScrollLayout(Modifier.fillMaxSize().testTag("discover_screen"),
         topBar = { SettingsRootTopBar("发现", Modifier.testTag("discover_root_toolbar")) }) { topInset ->
         // Tabs own a fixed row. In particular, Chat's reversed message list must not
         // spend scroll distance collapsing a parent header or resizing its viewport.
         Column(Modifier.fillMaxSize().padding(top = topInset)) {
-            SettingsSegmentedControl(listOf("音乐", "用户", "动态", "聊天"), pager.targetPage,
+            SettingsSegmentedControl(listOf("音乐", "关注"), pager.targetPage,
                 { index -> scope.launch { pager.animateScrollToPage(index) } },
                 Modifier.elasticRootComponent().padding(horizontal = 16.dp).padding(bottom = 12.dp), tag = "discover_tabs", role = Role.Tab)
             HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth().clipToBounds()
                 .testTag("discover_pager")) { page ->
                 when (page) {
                     0 -> DiscoverMusicPage(vm, navigate)
-                    1 -> DiscoverUsersPage(vm, navigate, pager.settledPage == 1)
-                    2 -> PostsScreen(posts, navigate)
-                    3 -> ChatScreen(chat, navigate, pager.settledPage == 3)
+                    1 -> FollowingFeedPage(following, navigate)
                 }
             }
         }

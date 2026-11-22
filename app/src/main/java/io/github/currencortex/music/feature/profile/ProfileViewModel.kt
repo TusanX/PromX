@@ -171,7 +171,6 @@ class DiscoverViewModel(val container: AppContainer) : ViewModel() {
     private var task: Job? = null
     private var requestGeneration = 0L
     init {
-        viewModelScope.launch { container.ready.await(); submit() }
         viewModelScope.launch {
             container.ready.await()
             container.musicSettings.state.map { it.server }.distinctUntilChanged().collect {
@@ -179,9 +178,6 @@ class DiscoverViewModel(val container: AppContainer) : ViewModel() {
                 scalesTask?.cancel(); scalesTask = viewModelScope.launch { appResult { container.profileRepository.loadScales() } }
             }
         }
-        viewModelScope.launch { container.musicSettings.state.map { it.server }.distinctUntilChanged().drop(1).collect {
-            ++requestGeneration; task?.cancel(); state.value = DiscoverState(); submit()
-        } }
     }
     fun loadStyles() {
         styleTask?.cancel()

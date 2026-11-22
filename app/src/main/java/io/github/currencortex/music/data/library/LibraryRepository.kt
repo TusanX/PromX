@@ -493,6 +493,12 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
         val d = api.get<ArtistAlbumsDto>("ncm/artist/albums", mapOf("id" to "$id", "offset" to "$offset", "limit" to "30", "order" to order))
         return d.albums.map(AlbumDto::domain) to d.more
     }
+    suspend fun followedArtists(offset: Int = 0, limit: Int = 50): FollowedArtistsPage {
+        val d = api.get<FollowedArtistsDto>("ncm/artist/followed", mapOf("offset" to "$offset", "limit" to "$limit"))
+        return FollowedArtistsPage(d.artists.map {
+            FollowedArtist(it.id, it.name, it.pic.replace("http:", "https:"), it.alias, it.total, it.albumTotal)
+        }.filter { it.id > 0 }, d.more, d.total)
+    }
     suspend fun album(id: Long) = api.get<AlbumDto>("ncm/album", mapOf("id" to "$id")).domain().let { album ->
         album.copy(id = id, songs = album.songs.map { it.copy(albumId = id) })
     }

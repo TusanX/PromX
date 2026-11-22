@@ -37,6 +37,11 @@ data class Artist(val id: Long, val name: String, val cover: String, val descrip
 @Serializable data class ArtistIntroduction(@SerialName("ti") val title: String = "", @SerialName("txt") val text: String = "")
 @Serializable data class ArtistBiography(val briefDesc: String = "", val introduction: List<ArtistIntroduction> = emptyList(), val code: Int = 200)
 @Serializable data class ArtistAlbumsDto(val albums: List<AlbumDto> = emptyList(), val more: Boolean = false)
+@Serializable data class FollowedArtistsDto(val artists: List<ArtistDto> = emptyList(), val more: Boolean = false, val total: Int = 0)
+data class FollowedArtist(val id: Long, val name: String, val cover: String, val alias: String = "",
+    val songTotal: Int = 0, val albumTotal: Int = 0)
+data class FollowedArtistsPage(val artists: List<FollowedArtist>, val more: Boolean, val total: Int)
+data class ArtistRelease(val artist: FollowedArtist, val album: Album)
 @Serializable data class ArtistMvsDto(val mvs: List<MvDto> = emptyList(), val more: Boolean = false)
 @Serializable data class ArtistProfile(
     val name: String = "", val cover: String = "", val avatar: String = "", val alias: String = "",

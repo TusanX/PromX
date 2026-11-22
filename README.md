@@ -29,7 +29,7 @@ Unified search, playlists, synchronized lyrics, audio effects and listening toge
 <a href="https://github.com/TusanX/PromX/releases/latest"><img src="https://img.shields.io/badge/Download_PromX_APK-111111?style=for-the-badge&logo=android&logoColor=white" alt="Download PromX APK"></a>
 <a href="https://github.com/TusanX/PromX/issues"><img src="https://img.shields.io/badge/Report_an_Issue-555555?style=for-the-badge&logo=github&logoColor=white" alt="Report an issue"></a>
 
-<sub>Latest signed release: 1.5.2 · Android 8.0 / API 26 or newer</sub>
+<sub>Latest signed release: 1.5.3 · Android 8.0 / API 26 or newer</sub>
 
 </div>
 
@@ -68,6 +68,7 @@ PromX 从 [CurrentMusicX](https://github.com/bileizhen/CurrentMusicX) 独立演�
 - **Private music servers.** Connect directly to Navidrome and Emby, then browse albums, songs, artists and playlists at the source quality allowed by the account.
 - **Local music support.** Scan selected folders on the device instead of requesting access to the entire storage volume.
 - **Unified discovery.** Daily recommendations, personalized discovery, private roaming, genre browsing, recent plays, liked songs, playlists and listening statistics.
+- **NetEase followed-artist feed.** See the artists you follow and their newest releases without the removed community user, post and chat tabs.
 - **Search across music and lyrics.** Find songs, artists, albums and playlists, or search using lyrics remembered from a track.
 - **A real playback client.** Background playback, media notification, queue management, shuffle, repeat, sleep timer and MV playback.
 - **Playback controls that matter.** Select default quality, preload the next track, restore the previous queue and choose whether PromX may mix with other apps.
@@ -97,6 +98,7 @@ PromX 是一个使用 Kotlin、Jetpack Compose 与 Miuix 构建的原生 Android
 ### 发现、搜索与歌单
 
 - 提供每日推荐、为你精选、私人漫游、曲风分类、最近播放、我喜欢与歌单管理。
+- 发现页提供 **网易云关注动态**，集中展示已关注音乐人和他们的最新专辑、单曲与近期发布。原用户目录、动态和聊天入口已移除。
 - 支持歌曲、歌手、专辑和歌单搜索，也可按记得的歌词内容搜歌。
 - 支持导入歌单链接、文本、图片和本地歌曲信息。
 - 支持网易云与 Prom 两套收藏状态，并可按账号绑定情况自动选择红心目标。
@@ -137,11 +139,12 @@ PromX 是一个使用 Kotlin、Jetpack Compose 与 Miuix 构建的原生 Android
 <p align="center">
   <img src=".github/img/promx-home.png" width="240" alt="PromX home">
   <img src=".github/img/promx-discover.png" width="240" alt="PromX discovery">
+  <img src=".github/img/promx-following.png" width="240" alt="PromX followed artists">
   <img src=".github/img/promx-my.png" width="240" alt="PromX library">
   <img src=".github/img/promx-settings.png" width="240" alt="PromX settings">
 </p>
 
-<p align="center"><sub>♪ Current 1.5.2 build on Android 16 · 界面截图与当前安装版本一致 ♪</sub></p>
+<p align="center"><sub>♪ Current 1.5.3 build on Android 16 · 界面截图与当前安装版本一致 ♪</sub></p>
 
 ## Supported sources 🎚️
 

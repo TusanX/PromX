@@ -54,7 +54,8 @@ class NeteaseGateway(val transport: NeteaseTransport) {
     }
     private fun songs(raw: JsonArray) = JsonArray(raw.mapNotNull { (it as? JsonObject)?.let(::song) }.filter { it.long("ncm_id") > 0 })
     private fun artist(raw: JsonObject) = buildJsonObject {
-        put("id", raw.long("id")); put("name", raw.text("name")); put("pic", raw.text("picUrl").ifBlank { raw.text("img1v1Url") })
+        put("id", raw.long("id")); put("name", raw.text("name")); put("pic", raw.text("picUrl")
+            .ifBlank { raw.text("avatar") }.ifBlank { raw.text("img1v1Url") })
         put("alias", raw.array("alias").mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.joinToString(" / "))
         put("total", raw.long("musicSize")); put("albumTotal", raw.long("albumSize"))
         put("briefDesc", raw.text("briefDesc")); put("mvTotal", raw.long("mvSize"))
@@ -358,6 +359,24 @@ class NeteaseGateway(val transport: NeteaseTransport) {
                 }
                 val raw = official("/api/artist/albums/$id", body, web = true, expected = expected)
                 return buildJsonObject { put("albums", JsonArray(raw.array("hotAlbums").mapNotNull { it as? JsonObject }.map { album(it) })); put("more", raw["more"] ?: JsonPrimitive(false)) }
+            }
+            "artist/followed" -> {
+                val raw = official("/api/artist/sublist", data("limit" to arg("limit", "50"), "offset" to arg("offset", "0"),
+                    "total" to "true"), web = true, expected = expected, authenticated = true)
+                val rows = when (val value = raw["data"]) {
+                    is JsonArray -> value
+                    is JsonObject -> value["artists"] as? JsonArray ?: value["data"] as? JsonArray ?: JsonArray(emptyList())
+                    else -> raw["artists"] as? JsonArray ?: JsonArray(emptyList())
+                }
+                val artists = rows.mapNotNull { it as? JsonObject }.map(::artist).filter { it.long("id") > 0 }
+                val more = (raw["more"] as? JsonPrimitive)?.booleanOrNull
+                    ?: ((raw["data"] as? JsonObject)?.get("more") as? JsonPrimitive)?.booleanOrNull
+                    ?: (raw["hasMore"] as? JsonPrimitive)?.booleanOrNull ?: false
+                val total = raw.long("count").takeIf { it > 0 } ?: raw.long("total").takeIf { it > 0 }
+                    ?: ((raw["data"] as? JsonObject)?.long("count") ?: 0L)
+                return buildJsonObject {
+                    put("artists", JsonArray(artists)); put("more", more); put("total", total)
+                }
             }
             "album" -> { val raw = official("/api/v1/album/$id", web = true, expected = expected); return album(raw.obj("album"), raw.array("songs")) }
             "mv/detail" -> return official("/api/v1/mv/detail", data("id" to arg("mvid")), web = true, expected = expected)

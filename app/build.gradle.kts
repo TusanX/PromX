@@ -55,8 +55,8 @@ android {
         }
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
         targetSdk = 36
-        versionCode = 51
-        versionName = "1.5.2"
+        versionCode = 52
+        versionName = "1.5.3"
         versionCode = requireNotNull(versionCode) * 100_000 + ciBuildNumber
         if (ciBuildNumber > 0) versionName = "$versionName-ci.$ciBuildNumber"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
