@@ -13,7 +13,7 @@ class UpdateProxy(endpoint: String = ENDPOINT) {
         check(configured) { "专用镜像尚未配置" }
         require(official.scheme == "https" && official.host == "github.com" && official.port == 443 &&
             official.username.isEmpty() && official.password.isEmpty() &&
-            official.encodedPath.startsWith("/bileizhen/CurrentMusicX/releases/download/") &&
+            official.encodedPath.startsWith("/bileizhen/PromX/releases/download/") &&
             official.query == null && official.fragment == null) { "更新来源不匹配" }
         return base.toString()
     }

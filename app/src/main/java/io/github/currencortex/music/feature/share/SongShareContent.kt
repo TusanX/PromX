@@ -15,12 +15,15 @@ internal data class SongShareContent(val title: String, val artists: String, val
             // IDs from other sources and private Navidrome credentials are never public song URLs.
             val id = if (!song.video && song.musicSource == MusicSource.NETEASE && song.navidrome == null && song.emby == null)
                 (song.externalIds.neteaseId?.toLongOrNull() ?: song.id).takeIf { it > 0 } else null
+            // B站：直接给视频页链接，任何设备都能打开
+            val bili = song.externalIds.bilibiliBvid?.takeIf { it.isNotBlank() }
+            val url = when {
+                bili != null -> "https://www.bilibili.com/video/$bili"
+                else -> id?.let { "https://music.163.com/song?id=$it" }
+            }
             return SongShareContent(clean(song.name).ifBlank { "未命名歌曲" },
                 clean(song.artists).ifBlank { "未知歌手" },
-                if (!song.video && song.musicSource == MusicSource.QQ_MUSIC)
-                    song.externalIds.qqMusicId?.takeIf { it.matches(Regex("[A-Za-z0-9]+")) }
-                        ?.let { "https://y.qq.com/n/ryqq/songDetail/$it" }
-                else id?.let { "https://music.20110208.xyz/app/#/song/$it" })
+                url)
         }
     }
 }

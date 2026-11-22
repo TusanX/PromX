@@ -45,7 +45,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
         LazyColumn(Modifier.fillMaxSize().testTag("levels_list"), state = list, contentPadding = PaddingValues(
             start = 16.dp, end = 16.dp, top = topInset + 12.dp, bottom = LocalMusicBottomInset.current + 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (!state.signedIn) item { SettingsHint("登录 CurrentMusic 后查看等级与成长进度") }
+            if (!state.signedIn) item { SettingsHint("登录 Prom 后查看等级与成长进度") }
             if (state.loading && state.progress == null) item { SettingsHint("正在获取等级…") }
             state.error?.let { error -> item { SettingsGroup {
                 SettingsHint(error, error = true)

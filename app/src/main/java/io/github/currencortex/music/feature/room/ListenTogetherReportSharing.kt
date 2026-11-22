@@ -71,8 +71,8 @@ internal object ListenTogetherReportSharing {
         return Intent(Intent.ACTION_SEND).apply {
             type = "image/png"
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_TITLE, "一起听报告 · CurrentMusicX")
-            putExtra(Intent.EXTRA_TEXT, "和好友一起听的这段时光，由 CurrentMusicX 分享。\n${report.officialUrl()}")
+            putExtra(Intent.EXTRA_TITLE, "一起听报告 · PromX")
+            putExtra(Intent.EXTRA_TEXT, "和好友一起听的这段时光，由 PromX 分享。\n${report.officialUrl()}")
             clipData = ClipData.newUri(context.contentResolver, "一起听报告", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
@@ -107,7 +107,7 @@ internal object ListenTogetherReportSharing {
                 paint.color = color; paint.textSize = size; paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
                 canvas.drawText(text, x, y, paint)
             }
-            label("CurrentMusicX", 72f, 100f, 38f, Color.WHITE, true)
+            label("PromX", 72f, 100f, 38f, Color.WHITE, true)
             label("LISTEN TOGETHER", 74f, 142f, 21f, 0xDDFFFFFF.toInt())
             label("一起听的这段时光", 72f, 245f, 58f, Color.WHITE, true)
             report.endTimeMs?.takeIf { it > 0 }?.let {
@@ -139,7 +139,7 @@ internal object ListenTogetherReportSharing {
             }
             label("每一首歌，都有彼此", 72f, 1110f, 34f, Color.WHITE, true)
             paragraph(canvas, "数据来自网易云一起听\n扫码查看网易云官方报告", 74f, 1144f, 570, 25f, 0xEEFFFFFF.toInt(), 3)
-            paragraph(canvas, "由 CurrentMusicX 生成并分享", 74f, 1310f, 570, 22f, 0xDDFFFFFF.toInt(), 2)
+            paragraph(canvas, "由 PromX 生成并分享", 74f, 1310f, 570, 22f, 0xDDFFFFFF.toInt(), 2)
             val qr = qr(report.officialUrl())
             try {
                 paint.color = Color.WHITE

@@ -26,7 +26,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             colors = ButtonDefaults.textButtonColors(color = colors.primary, textColor = colors.onPrimary))
     }) {
         Column(Modifier.fillMaxWidth().testTag("update_available_prompt"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("CurrentMusic ${prompt.release.version} 已发布", fontSize = 17.sp)
+            Text("Prom ${prompt.release.version} 已发布", fontSize = 17.sp)
             Text("查看更新内容并选择是否下载。", fontSize = 14.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             prompt.error?.let { Text(it, fontSize = 13.sp, color = MiuixTheme.colorScheme.error) }

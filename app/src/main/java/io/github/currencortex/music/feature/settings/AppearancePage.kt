@@ -52,7 +52,6 @@ import kotlin.math.roundToInt
     val glass = config.liquidGlass && Build.VERSION.SDK_INT >= 33
     SettingsUiScope {
         SettingsPage("外观", "appearance_screen", onBack, padding = PaddingValues(bottom = 32.dp)) {
-            item("live_preview") { AppearanceLivePreview(config) }
             item("theme_mode") {
                 SettingsPreviewChoiceGroup("主题模式", MusicIcons.Sun, listOf("自动", "浅色", "深色"),
                     config.themeMode.ordinal, { index -> viewModel.edit { it.copy(themeMode = ThemeMode.entries[index]) } }, "appearance_theme") { index ->
@@ -76,10 +75,9 @@ import kotlin.math.roundToInt
             }
             item("launch_animation") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // 只保留「经典 / 无开屏动画」两项，且不再显示缩略图标的预览块
                     SettingsPreviewChoiceGroup("开屏动画", MusicIcons.Play, LaunchStyle.entries.map { it.label },
-                        config.launchStyle.ordinal, { index -> viewModel.edit { it.copy(launchStyle = LaunchStyle.entries[index]) } }, "setting_launch_style") { index ->
-                        AppearanceLaunchThumb(LaunchStyle.entries[index], config)
-                    }
+                        config.launchStyle.ordinal, { index -> viewModel.edit { it.copy(launchStyle = LaunchStyle.entries[index]) } }, "setting_launch_style") { }
                     SettingsGroup(Modifier.padding(horizontal = 16.dp)) {
                         SettingsPreference("预览开屏动画", "查看当前样式与用户名效果", Modifier.testTag("setting_launch_preview"),
                             enabled = config.launchStyle != LaunchStyle.NONE, onClick = onPreviewLaunch)

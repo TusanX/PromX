@@ -6,11 +6,6 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.longPreferencesKey
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 internal object SettingsPreferences {
     private val THEME = stringPreferencesKey("theme_mode")
@@ -31,7 +26,6 @@ internal object SettingsPreferences {
     private val PREDICTIVE = booleanPreferencesKey("predictive_back")
     private val DEPTH_RIBBON = booleanPreferencesKey("playlist_depth_ribbon")
     private val RECORD_SHELF = booleanPreferencesKey("playlist_record_shelf")
-    private val PLAYLIST_ORDERS = stringPreferencesKey("playlist_orders")
     private val RECORD_PREVIEW_MODE = stringPreferencesKey("record_shelf_preview_mode")
     private val RECORD_FULL_PREVIEW = booleanPreferencesKey("record_shelf_full_preview")
     private val NAVIGATION_GLOW = booleanPreferencesKey("navigation_glow")
@@ -44,13 +38,13 @@ internal object SettingsPreferences {
     fun read(p: Preferences) = AppearanceSettings(
         customFont = p[CUSTOM_FONT].orEmpty(),
         pureBlack = p[PURE_BLACK] ?: false,
-        primaryColor = p[PRIMARY_COLOR] ?: DefaultThemeColors.first(),
-        primaryColors = p[PRIMARY_COLORS]?.split(',')?.mapNotNull(String::toLongOrNull) ?: DefaultThemeColors,
+        primaryColor = migratedBrandColor(p),
+        primaryColors = migratedPalette(p),
         colorStyle = runCatching { ThemeColorStyle.valueOf(p[COLOR_STYLE].orEmpty()) }.getOrDefault(ThemeColorStyle.VIVID),
         customTextScale = p[CUSTOM_TEXT_SCALE] ?: false,
         textScale = p[TEXT_SCALE] ?: 1f,
         launchStyle = runCatching { LaunchStyle.valueOf(p[LAUNCH_STYLE].orEmpty()) }.getOrDefault(LaunchStyle.CLASSIC),
-        themeMode = runCatching { ThemeMode.valueOf(p[THEME] ?: ThemeMode.SYSTEM.name) }.getOrDefault(ThemeMode.SYSTEM),
+        themeMode = migratedThemeMode(p),
         monet = p[MONET] ?: false,
         uiScale = p[UI_SCALE] ?: 1f,
         blur = p[BLUR] ?: true,
@@ -60,10 +54,6 @@ internal object SettingsPreferences {
         navigationGlow = p[NAVIGATION_GLOW] ?: true,
         playlistDepthRibbon = p[DEPTH_RIBBON] ?: false,
         playlistRecordShelf = p[RECORD_SHELF] ?: false,
-        playlistOrders = runCatching {
-            kotlinx.serialization.json.Json.parseToJsonElement(p[PLAYLIST_ORDERS].orEmpty())
-                .jsonObject.mapValues { it.value.jsonPrimitive.int }
-        }.getOrDefault(emptyMap()),
         recordShelfPreviewMode = runCatching { RecordShelfPreviewMode.valueOf(p[RECORD_PREVIEW_MODE].orEmpty()) }.getOrDefault(RecordShelfPreviewMode.ONCE),
         recordShelfFullPreview = p[RECORD_FULL_PREVIEW] ?: false,
         refreshRate = runCatching { RefreshRatePreference.valueOf(p[REFRESH_RATE] ?: RefreshRatePreference.SYSTEM.name) }.getOrDefault(RefreshRatePreference.SYSTEM),
@@ -72,6 +62,23 @@ internal object SettingsPreferences {
         playerDynamicBackground = p[PLAYER_DYNAMIC_BACKGROUND] ?: true,
         playerCoverStyle = runCatching { PlayerCoverStyle.valueOf(p[PLAYER_COVER_STYLE].orEmpty()) }.getOrDefault(PlayerCoverStyle.CIRCLE),
     ).normalized()
+
+    /** Existing installs that never changed the legacy defaults adopt the new dark default once. */
+    private fun isLegacyUntouched(p: Preferences): Boolean =
+        p[THEME].let { it == null || it == ThemeMode.SYSTEM.name } &&
+            p[PRIMARY_COLOR].let { it == null || it == LegacyBrandSeedColor }
+
+    private fun migratedThemeMode(p: Preferences): ThemeMode = if (isLegacyUntouched(p)) ThemeMode.DARK else
+        runCatching { ThemeMode.valueOf(p[THEME] ?: ThemeMode.DARK.name) }.getOrDefault(ThemeMode.DARK)
+
+    private fun migratedBrandColor(p: Preferences): Long = if (isLegacyUntouched(p)) BrandSeedColor else
+        p[PRIMARY_COLOR] ?: BrandSeedColor
+
+    private fun migratedPalette(p: Preferences): List<Long> {
+        val stored = p[PRIMARY_COLORS]?.split(',')?.mapNotNull(String::toLongOrNull)
+        if (isLegacyUntouched(p)) return DefaultThemeColors
+        return stored?.map { (it and 0xFFFFFF) or 0xFF000000 }.orEmpty().ifEmpty { DefaultThemeColors }
+    }
 
     fun write(p: MutablePreferences, s: AppearanceSettings) {
         val v = s.normalized()
@@ -94,7 +101,6 @@ internal object SettingsPreferences {
         p[NAVIGATION_GLOW] = v.navigationGlow
         p[DEPTH_RIBBON] = v.playlistDepthRibbon
         p[RECORD_SHELF] = v.playlistRecordShelf
-        p[PLAYLIST_ORDERS] = JsonObject(v.playlistOrders.mapValues { JsonPrimitive(it.value) }).toString()
         p[RECORD_PREVIEW_MODE] = v.recordShelfPreviewMode.name
         p[RECORD_FULL_PREVIEW] = v.recordShelfFullPreview
         p[REFRESH_RATE] = v.refreshRate.name

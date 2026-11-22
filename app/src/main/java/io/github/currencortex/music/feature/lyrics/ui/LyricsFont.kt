@@ -8,10 +8,8 @@ import io.github.currencortex.music.data.settings.LyricsWeight
 
 /** Follow the device's default typeface unless the user imports a custom font. */
 val LyricsFontFamily = FontFamily.Default
-val WenkaiLyricsFontFamily = FontFamily(
-    Font(io.github.currencortex.music.R.font.lxgw_wenkai_regular, weight = FontWeight.Normal, loadingStrategy = FontLoadingStrategy.Async),
-    Font(io.github.currencortex.music.R.font.lxgw_wenkai_medium, weight = FontWeight.Medium, loadingStrategy = FontLoadingStrategy.Async),
-)
+// 体积优化：不再打包 48 MB 的文楷字库，该选项回落到系统字体（用户导入的自定义字体仍可用）
+val WenkaiLyricsFontFamily = FontFamily.Default
 val LocalLyricsFont = androidx.compose.runtime.staticCompositionLocalOf<FontFamily> { LyricsFontFamily }
 
 @androidx.compose.runtime.Composable

@@ -9,6 +9,10 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -58,6 +62,8 @@ internal val SettingsToolbarHeight=72.dp
     opacity:()->Float={ .9f },
     content:@Composable ()->Unit) {
     val status=WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val currentOpacity by rememberUpdatedState(opacity)
+    val opaque by remember { derivedStateOf { currentOpacity() >= .999f } }
     Box(modifier.fillMaxWidth().testTag("settings_floating_header")
         .pointerInput(Unit) {
             // This node supplies the header's hit region. Child buttons still own their taps.
@@ -66,11 +72,11 @@ internal val SettingsToolbarHeight=72.dp
                 do {val event=awaitPointerEvent(PointerEventPass.Final)}while(event.changes.any {it.pressed})
             }
         }) {
-        Box(Modifier.matchParentSize().layout {measurable,constraints->
+        Box(Modifier.matchParentSize().then(if (opaque) Modifier.background(background) else Modifier).layout {measurable,constraints->
             val height=constraints.maxHeight+16.dp.roundToPx()
             val child=measurable.measure(constraints.copy(minHeight=height,maxHeight=height))
             layout(constraints.maxWidth,constraints.maxHeight){child.place(0,0)}
-        }.headerScrim(background,status,toolbarHeight,opacity))
+        }.then(if (opaque) Modifier else Modifier.headerScrim(background,status,toolbarHeight,opacity)))
         content()
     }
 }
@@ -79,6 +85,7 @@ internal val SettingsToolbarHeight=72.dp
 @Composable internal fun SettingsScrollLayout(modifier:Modifier=Modifier,
     background:Color=MiuixTheme.colorScheme.background,topBar:@Composable ()->Unit,
     toolbarHeight:Dp=SettingsToolbarHeight,
+    headerOpacity:()->Float={ .9f },
     footer:@Composable androidx.compose.foundation.layout.BoxScope.()->Unit={},
     glassOverContent:Boolean=true,
     content:@Composable (topInset:Dp)->Unit) {
@@ -93,7 +100,8 @@ internal val SettingsToolbarHeight=72.dp
             Box(Modifier.fillMaxSize().then(if(body!=null)Modifier.layerBackdrop(body)else Modifier)){content(inset)}
         }
         CompositionLocalProvider(LocalGlassBackdrop provides combined) {
-            SettingsFloatingHeader(background=background,toolbarHeight=toolbarHeight,content=topBar)
+            SettingsFloatingHeader(background=background,toolbarHeight=toolbarHeight,
+                opacity=headerOpacity,content=topBar)
             footer()
         }
     }

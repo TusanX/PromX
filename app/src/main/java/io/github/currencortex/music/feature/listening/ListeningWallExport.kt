@@ -132,7 +132,7 @@ import kotlin.math.absoluteValue
                     try {
                         saveListeningExportToGallery(context, file, "${title}-${if (kind == ListeningExportKind.POSTER) "唱片海报" else "手机壁纸"}-${System.currentTimeMillis()}.png")
                     } finally { file.delete() }
-                    Toast.makeText(context, "已保存到相册 · CurrentMusicX", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "已保存到相册 · PromX", Toast.LENGTH_SHORT).show()
                 } else {
                     try { documents.exportFile(file, "${title}-${template.label}.png") }
                     finally { file.delete() }

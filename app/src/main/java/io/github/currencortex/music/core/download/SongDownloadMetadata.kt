@@ -55,7 +55,7 @@ object DownloadLyrics {
         }
         return buildString {
             appendLine("[ti:${clean(song.name)}]"); appendLine("[ar:${clean(song.artists)}]")
-            appendLine("[al:${clean(song.album)}]"); appendLine("[by:CurrentMusic]")
+            appendLine("[al:${clean(song.album)}]"); appendLine("[by:Prom]")
             document.lines.sortedBy { it.startTimeMs }.forEach { line ->
                 (listOf(line) + line.backgroundVocals).sortedBy { it.startTimeMs }.forEach { row ->
                     appendLine(stamp(row.startTimeMs, '[', ']') + body(row))
@@ -81,7 +81,7 @@ object SongTagWriter {
         // RIFF INFO cannot hold lyrics or artwork; WAV mirrors every field into an embedded ID3v2 chunk.
         val rich: Tag = (tag as? WavTag)?.let { wav -> wav.getID3Tag() ?: ID3v24Tag().also(wav::setID3Tag) } ?: tag
         val fields = listOf(FieldKey.TITLE to song.name, FieldKey.ARTIST to song.artists, FieldKey.ALBUM to song.album,
-            FieldKey.COMMENT to "Downloaded with CurrentMusic · ${song.musicSource.name}:${song.id}")
+            FieldKey.COMMENT to "Downloaded with Prom · ${song.musicSource.name}:${song.id}")
         for ((key, value) in fields) {
             tag.setField(key, value)
             if (rich !== tag) rich.setField(key, value)

@@ -216,7 +216,7 @@ fun UpdatePageContent(state: UpdateState, transferState: UpdateTransferState = U
                     MorphingVersionNumber(heroVersion, installedVersion,
                         fontSize = if (width < 360.dp) 66.sp else 78.sp, color = pageWhite,
                         modifier = Modifier.testTag("update_hero_version"))
-                    Text("CurrentMusic", color = pageWhite, fontSize = 25.sp, fontWeight = FontWeight.Light)
+                    Text("Prom", color = pageWhite, fontSize = 25.sp, fontWeight = FontWeight.Light)
                     Text(versionLabel,
                         color = pageMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp).testTag("update_version_type"))
                 }
@@ -239,7 +239,7 @@ fun UpdatePageContent(state: UpdateState, transferState: UpdateTransferState = U
                                 .verticalScroll(notesScroll).testTag("update_message"),
                                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
                                 Text("软件版本", fontSize = 16.sp, color = pageWhite, fontWeight = FontWeight.Medium)
-                                Text("CurrentMusic $displayedVersion" +
+                                Text("Prom $displayedVersion" +
                                     (release?.let { " · ${updateSize(it.size)}" } ?: ""), fontSize = 12.sp, color = pageMuted)
                                 HorizontalDivider(color = Color.White.copy(alpha = .12f))
                                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),

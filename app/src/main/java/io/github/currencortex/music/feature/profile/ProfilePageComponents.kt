@@ -7,8 +7,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
@@ -19,7 +22,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.currencortex.music.data.profile.ProfileStats
 import io.github.currencortex.music.data.profile.listeningDuration
-import io.github.currencortex.music.data.settings.MusicPlatform
 import io.github.currencortex.music.ui.component.rememberPageNavigationSource
 import io.github.currencortex.music.ui.component.LocalRootTabSwipe
 import io.github.currencortex.music.ui.component.MusicIcons
@@ -32,9 +34,6 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     public: Boolean = false, loading: Boolean = false, reload: () -> Unit = {}) {
     val actions: @Composable RowScope.() -> Unit = {
         if (public) GlassIconButton(reload, "刷新", enabled = !loading) { Icon(MusicIcons.Update, null) }
-        else GlassIconButton({ navigate("user/announcements") }, "公告", Modifier.testTag("me_announcements")) {
-            Icon(MusicIcons.File, null)
-        }
         onSettings?.let { action -> GlassIconButton(action, "设置", Modifier.testTag("me_settings")) {
             Icon(Icons.Outlined.Settings, null)
         } }
@@ -70,34 +69,63 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     }
 }
 
-@Composable internal fun ProfileLibrarySection(navigate: (String) -> Unit, platform: MusicPlatform = MusicPlatform.NETEASE,
-    showLikes: Boolean = true) {
-    val qq = platform == MusicPlatform.QQ_MUSIC
+/**
+ * 账号行：登录后左边换成平台头像，副标题写清楚连接状态——
+ * 三行并排时，用户要一眼看出哪个平台已经连上了。
+ */
+@Composable internal fun ProfileAccountDestination(title: String, summary: String, avatarUrl: String,
+    icon: ImageVector, tag: String, showDot: Boolean, onClick: () -> Unit) {
+    val source = rememberPageNavigationSource(title, summary, icon)
+    SettingsUiScope {
+        SettingsPreference(title, summary, Modifier.testTag(tag).then(source.modifier), onClick = { source.open(onClick) },
+            leading = {
+                if (avatarUrl.isNotBlank()) {
+                    coil3.compose.AsyncImage(
+                        model = avatarUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                } else {
+                    Icon(icon, null, Modifier.size(24.dp))
+                }
+            },
+            trailing = {
+                if (showDot) Box(Modifier.size(7.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(MiuixTheme.colorScheme.primary))
+                Icon(MusicIcons.Forward, null, Modifier.size(16.dp), tint = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            })
+    }
+}
+
+@Composable internal fun ProfileLibrarySection(navigate: (String) -> Unit,
+    container: io.github.currencortex.music.AppContainer? = null) {
+    val likesScope = androidx.compose.runtime.rememberCoroutineScope()
     SettingsListSection("我的音乐") {
-        if (showLikes) {
-            ProfileDestination("我喜欢", "收藏的歌曲", MusicIcons.Heart, "open_likes") {
-                navigate(if (qq) "qq/likes" else "lib/likes")
+        ProfileDestination("我喜欢", "收藏的歌曲", MusicIcons.Heart, "open_likes") {
+            if (container == null) navigate("lib/likes") else likesScope.launch {
+                navigate(io.github.currencortex.music.feature.library.likesRouteFor(container))
             }
-            SettingsDivider(52.dp)
-        }
-        ProfileDestination("歌单", "创建与收藏的歌单", MusicIcons.List, "open_playlists") {
-            navigate(if (qq) "qq/playlists" else "lib/playlists")
         }
         SettingsDivider(52.dp)
-        if (qq) {
-            ProfileDestination("本周常听", "本周播放次数最多的歌曲", MusicIcons.Update, "open_recent") {
-                navigate("qq/recent")
+        ProfileDestination("歌单", "创建与收藏的歌单", MusicIcons.List, "open_playlists") { navigate("lib/playlists") }
+        SettingsDivider(52.dp)
+        ProfileDestination("最近播放", "回顾听过的歌曲", MusicIcons.Update, "open_recent") { navigate("lib/recent") }
+        val biliMode = container?.musicSettings?.state?.collectAsStateWithLifecycle()?.value?.primarySource ==
+            io.github.currencortex.music.data.song.MusicSource.BILIBILI
+        if (!biliMode) {
+            SettingsDivider(52.dp)
+            ProfileDestination("听歌时长", "本机与网易云听歌足迹", MusicIcons.Headphones, "open_listening") {
+                navigate("user/listening")
+            }
+        }
+        SettingsDivider(52.dp)
+        if (biliMode) {
+            ProfileDestination("本地缓存", "已缓存的哔哩哔哩视频与音频", MusicIcons.Device, "open_local_music") {
+                navigate("lib/local")
             }
         } else {
-            ProfileDestination("音乐云盘", "网易云音乐个人云盘", MusicIcons.Storage, "open_cloud_drive") { navigate("lib/cloud") }
-            SettingsDivider(52.dp)
-            ProfileDestination("最近播放", "回顾听过的歌曲", MusicIcons.Update, "open_recent") { navigate("lib/recent") }
+            ProfileDestination("本地音乐", "手机上的歌曲", MusicIcons.Device, "open_local_music") { navigate("lib/local") }
         }
-        SettingsDivider(52.dp)
-        ProfileDestination("听歌时长", if (qq) "本机与 QQ 音乐听歌足迹" else "本机与网易云听歌足迹",
-            MusicIcons.Headphones, "open_listening") { navigate("user/listening") }
-        SettingsDivider(52.dp)
-        ProfileDestination("本地音乐", "手机上的歌曲", MusicIcons.Device, "open_local_music") { navigate("lib/local") }
     }
 }
 
@@ -105,31 +133,30 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable internal fun ProfileServicesSection(navigate: (String) -> Unit, tasks: Boolean,
     native: Boolean = false, bound: Boolean = true,
     navidromeConfigured: Boolean = false, embyConfigured: Boolean = false,
-    platform: MusicPlatform = MusicPlatform.NETEASE, qqBound: Boolean = false) {
+    container: io.github.currencortex.music.AppContainer? = null) {
     SettingsListSection("音乐服务") {
-        if (platform == MusicPlatform.QQ_MUSIC) {
-            ProfileDestination(if (qqBound) "QQ 音乐账号" else "登录 QQ 音乐",
-                if (qqBound) "已连接，管理个人收藏、歌单与推荐" else "扫码登录后访问个人音乐库与推荐",
-                MusicIcons.Account, "open_qq_binding") { navigate("qq/account") }
-            SettingsDivider(52.dp)
-            ProfileDestination("收藏的专辑", "管理 QQ 音乐收藏专辑", MusicIcons.List, "open_qq_albums") {
-                navigate("qq/albums")
-            }
-        } else {
-            ProfileDestination(if (native && !bound) "登录网易云" else "网易云账号",
-                if (native && !bound) "需先注册并登录 CurrentMusic" else "绑定账号、同步歌单",
-                MusicIcons.Account, "open_binding") { navigate("user/binding") }
-        }
-        if (tasks && platform == MusicPlatform.NETEASE) {
+        ProfileDestination(if (native && !bound) "登录网易云" else "网易云账号",
+            if (!bound) "扫码绑定网易云，解锁播放与推荐" else "已绑定 · 管理账号与歌单", MusicIcons.Account, "open_binding") { navigate("user/binding") }
+        if (tasks) {
             SettingsDivider(52.dp)
             ProfileDestination("网易云任务", "签到、云贝与会员成长", MusicIcons.Check, "open_netease_tasks") { navigate("user/netease-tasks") }
         }
-        if (platform == MusicPlatform.NETEASE) {
-            SettingsDivider(52.dp)
-            ProfileDestination("导入歌单", "链接、文字、图片与本地歌曲", MusicIcons.Transfer, "profile_playlist_import") {
-                navigate("user/playlist-import")
-            }
-        }
+        SettingsDivider(52.dp)
+        val qqAccount = container?.qqSession?.account
+        ProfileAccountDestination(
+            title = "QQ 音乐",
+            summary = qqAccount?.let { "已连接 ${it.nickname.ifBlank { it.uin }}" } ?: "扫码登录，解锁 QQ 音乐曲库",
+            avatarUrl = qqAccount?.avatar.orEmpty(), icon = MusicIcons.Account,
+            tag = "profile_qq_login", showDot = qqAccount != null) { navigate("qq/login") }
+        SettingsDivider(52.dp)
+        val biliProfile = container?.biliSession?.profile
+        ProfileAccountDestination(
+            title = "哔哩哔哩",
+            summary = biliProfile?.let { "已连接 ${it.uname} · Lv${it.level}" } ?: "扫码登录，读取收藏夹与关注",
+            avatarUrl = biliProfile?.face.orEmpty(), icon = MusicIcons.Account,
+            tag = "profile_bili_login", showDot = biliProfile != null) { navigate("bili/login") }
+        SettingsDivider(52.dp)
+        ProfileDestination("导入歌单", "链接、文字、图片与本地歌曲", MusicIcons.Transfer, "profile_playlist_import") { navigate("user/playlist-import") }
         if (navidromeConfigured) {
             SettingsDivider(52.dp)
             ProfileDestination("Navidrome 曲库", "自己的音乐服务器", MusicIcons.Storage, "profile_navidrome") { navigate("navidrome") }
@@ -142,36 +169,18 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 }
 
 @Composable internal fun ProfileAccountSection(navigate: (String) -> Unit, native: Boolean = false, administrator: Boolean = false) {
-    SettingsListSection("账号") {
-        if (native) ProfileDestination("CurrentMusic 账户", "注册与登录、头像装饰与一起听", MusicIcons.Account,
-            "open_currentmusic_login") { navigate("user/login") }
-        else {
-            ProfileDestination("等级与成长", "查看积分、每日进度与等级试炼", MusicIcons.Check, "open_levels") { navigate("user/levels") }
-            SettingsDivider(52.dp)
-            ProfileDestination("头像挂件", "装饰你的头像", MusicIcons.Image, "open_decorations") { navigate("user/decorations") }
-            SettingsDivider(52.dp)
-            ProfileDestination("账号与安全", "切换账号、修改密码与退出登录", MusicIcons.Account, "open_security") { navigate("user/security") }
-            if (administrator) {
-                SettingsDivider(52.dp)
-                ProfileDestination("管理员面板", "用户、公告、设备与系统管理", MusicIcons.Account, "open_admin") { navigate("user/admin") }
-            }
-        }
-    }
+    // 账号系统已移除：不渲染任何账号/等级/安全/管理员入口
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun ProfileStatsBlock(stats: ProfileStats, likesLabel: String = "点赞",
-    likesValue: String = "${stats.likes}", onLikes: (() -> Unit)? = null, onListening: (() -> Unit)? = null) {
+@Composable internal fun ProfileStatsBlock(stats: ProfileStats, onListening: (() -> Unit)? = null) {
     val muted = MiuixTheme.colorScheme.onSurfaceVariantSummary
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp).testTag("profile_stats"),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            listOf(Triple(likesLabel, likesValue, onLikes), Triple("收藏", "${stats.favs}", null),
-                Triple("歌单", "${stats.playlists}", null)).forEach { (label, value, action) ->
-                Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}
-                    .then(if (action != null) Modifier.clickable(role = Role.Button, onClick = action)
-                        .testTag("profile_platform_likes") else Modifier),
+            listOf("点赞" to "${stats.likes}", "收藏" to "${stats.favs}", "歌单" to "${stats.playlists}").forEach { (label, value) ->
+                Column(Modifier.weight(1f).semantics(mergeDescendants = true) {},
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(value, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold)
                     Text(label, fontSize = 12.sp, lineHeight = 16.sp, color = muted)

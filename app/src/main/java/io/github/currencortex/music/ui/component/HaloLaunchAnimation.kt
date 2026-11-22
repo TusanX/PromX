@@ -85,7 +85,7 @@ internal const val HALO_INTRO_MS = 8500
     LaunchedEffect(renderer) { if (renderer != null) prepared() }
     Box(Modifier.fillMaxSize()) {
         Canvas(Modifier.fillMaxSize().testTag("halo_launch_frame")
-            .semantics { contentDescription = "CurrentMusic · $name" }) {
+            .semantics { contentDescription = "Prom · $name" }) {
             drawRect(Color.Black)
             renderer?.draw(drawContext.canvas.nativeCanvas, size.width, size.height,
                 if (reducedMotion) 7000f else time())

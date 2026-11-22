@@ -87,7 +87,7 @@ internal fun WorkInfo?.mvLabel(): String = when {
                 modifier = Modifier.testTag("mv_download_quality"))
             MusicDestinationRow("保存位置", { afterFolder = false; folder.launch(directory) }, enabled = !active,
                 summary = directory?.let { Uri.decode(it.lastPathSegment.orEmpty()).substringAfter(':') }
-                    ?: if (Build.VERSION.SDK_INT >= 29) "Download/CurrentMusic" else "请选择文件夹")
+                    ?: if (Build.VERSION.SDK_INT >= 29) "Download/Prom" else "请选择文件夹")
             Text("保存 MP4 视频，离开播放页后继续下载。", fontSize = 12.sp,
                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f))
             if (active) {

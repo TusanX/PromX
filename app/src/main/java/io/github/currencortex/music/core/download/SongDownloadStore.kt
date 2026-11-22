@@ -32,7 +32,7 @@ class SongDownloadStore(private val context: Context) {
                     resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
                         put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                         put(MediaStore.MediaColumns.MIME_TYPE, item.mime)
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/CurrentMusic")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Prom")
                         put(MediaStore.MediaColumns.IS_PENDING, 1)
                     })
                 } else {

@@ -12,7 +12,7 @@ permissions:
 jobs:
   update:
     if: >-
-      github.repository == 'bileizhen/CurrentMusicX' && github.ref == 'refs/heads/main' &&
+      github.repository == 'TusanX/PromX' && github.ref == 'refs/heads/main' &&
       (github.event_name != 'pull_request_target' ||
        (!github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'bot: skip'))) &&
       (github.event.action != 'unlabeled' || github.event.label.name == 'bot: skip') &&

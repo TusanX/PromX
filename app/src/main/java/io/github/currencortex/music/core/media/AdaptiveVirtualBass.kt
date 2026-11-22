@@ -1,6 +1,7 @@
 package io.github.currencortex.music.core.media
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.pow
@@ -27,15 +28,13 @@ internal class AdaptiveVirtualBass(sampleRate: Int, channels: Int) {
         val targetAmount = strength.coerceIn(0, 100) / 100.0
         enabledMix += switchSmoothing * ((if (enabled) 1.0 else 0.0) - enabledMix)
         amount += parameterSmoothing * (targetAmount - amount)
-        val amountDelta = amount - targetAmount
-        if (amountDelta > -1e-6 && amountDelta < 1e-6) amount = targetAmount
+        if (abs(amount - targetAmount) < 1e-6) amount = targetAmount
         if (!enabled && enabledMix < 1e-5) enabledMix = 0.0
         val mix = enabledMix * amount
         if (mix == 0.0) {
             if (!cleared) { states.forEach(Channel::reset); cleared = true }
             for (channel in states.indices) {
-                val value = frame[channel]
-                if (value != value || value > MAX_INPUT || value < -MAX_INPUT) frame[channel] = 0.0
+                if (!frame[channel].isFinite() || abs(frame[channel]) > MAX_INPUT) frame[channel] = 0.0
             }
             return
         }
@@ -45,7 +44,7 @@ internal class AdaptiveVirtualBass(sampleRate: Int, channels: Int) {
             val input = frame[channel]
             // Leave ample internal headroom, but never retain a corrupt finite value
             // in the slow low-frequency filters for seconds after that sample.
-            if (input != input || input > MAX_INPUT || input < -MAX_INPUT) {
+            if (!input.isFinite() || abs(input) > MAX_INPUT) {
                 state.reset()
                 frame[channel] = 0.0
                 continue
@@ -66,7 +65,7 @@ internal class AdaptiveVirtualBass(sampleRate: Int, channels: Int) {
             state.previousDcFree = dcFree
             // Strength zero is dry; intermediate strengths replace only that fraction of the band.
             val output = input + mix * (dcFree - removed)
-            if (output == output) frame[channel] = output
+            if (output.isFinite()) frame[channel] = output
             else { state.reset(); frame[channel] = 0.0 }
         }
     }

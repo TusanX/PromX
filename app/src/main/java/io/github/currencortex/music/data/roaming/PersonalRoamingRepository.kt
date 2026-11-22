@@ -6,8 +6,7 @@ import io.github.currencortex.music.data.song.Song
 import kotlinx.serialization.json.*
 
 data class RoamingChoice(val code: String, val title: String, val subtitle: String = "",
-    val scene: Boolean = false, val icon: String = "", val cascade: String = "",
-    val poolId: String = "") {
+    val scene: Boolean = false, val icon: String = "", val cascade: String = "") {
     val key get() = if (scene) "scene:$code" else code
     val mode get() = if (scene) "SCENE_RCMD" else code
     val subMode get() = if (scene) code else ""

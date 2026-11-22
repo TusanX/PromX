@@ -16,6 +16,9 @@ val keystoreProperties = rootProject.file("keystore.properties").takeIf { it.isF
     Properties().apply { file.inputStream().use(::load) }
 }
 
+// Ordinary builds include the verified arm64 engine, JNI bridge and MNN runtime.
+// The opt-out is retained only for import-path interoperability tests.
+val originalEffectsBundled = providers.gradleProperty("neteaseOriginalEffects").orNull != "false"
 val updateDownloadExperience = providers.gradleProperty("updateDownloadExperience").orNull == "true"
 val updateAnimationPreviewVersion = providers.gradleProperty("updateAnimationPreviewVersion").orNull.orEmpty()
 require(updateAnimationPreviewVersion.isEmpty() ||
@@ -26,6 +29,7 @@ require(updateAnimationPreviewVersion.isEmpty() ||
 require(!updateDownloadExperience || providers.gradleProperty("isolatedDebug").orNull == "true") {
     "Download experience requires the isolated debug package"
 }
+val originalEffectsLibs = file("src/main/jniLibs/arm64-v8a")
 
 // Reserve 100,000 codes per release; CI builds of that release use its trailing slots.
 // A later stable release must increment the base versionCode below, as before.
@@ -43,53 +47,44 @@ android {
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "4.1.2" } }
 
     defaultConfig {
-        applicationId = "com.bileizhen.currentmusic"
+        applicationId = "com.prom.music"
         minSdk = 26
         // Only PR smoke builds opt into a single ABI; releases keep every supported ABI.
         if (providers.gradleProperty("ciPrArm64Only").orNull == "true") {
             ndk.abiFilters += "arm64-v8a"
         }
-        externalNativeBuild {
-            cmake {
-                arguments += "-DANDROID_STL=c++_static"
-                // The Android NDK toolchain supports ccache through ANDROID_CCACHE.
-                // CI-only, so local builds and release signing are unchanged.
-                if (providers.gradleProperty("ciNativeCcache").orNull == "true") {
-                    arguments += "-DANDROID_CCACHE=ccache"
-                }
-            }
-        }
+        externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
         targetSdk = 36
-        versionCode = 39
-        versionName = "1.3.6"
+        versionCode = 52
+        versionName = "1.5.3"
         versionCode = requireNotNull(versionCode) * 100_000 + ciBuildNumber
         if (ciBuildNumber > 0) versionName = "$versionName-ci.$ciBuildNumber"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "NETEASE_ORIGINAL_EFFECTS", originalEffectsBundled.toString())
         buildConfigField("boolean", "UPDATE_DOWNLOAD_EXPERIENCE", "false")
         buildConfigField("String", "UPDATE_ANIMATION_PREVIEW_VERSION", "\"\"")
         manifestPlaceholders["appLabel"] = "@string/app_name"
-    }
-
-    // Non-draft app PRs run the complete :app:lintRelease check before merge.
-    // For CI prereleases, avoid the duplicate lintVitalRelease pulled in by
-    // :app:assembleRelease (4m04s of work in the sampled CI build).
-    // Normal stable/local release builds keep Android's fatal release lint gate.
-    lint {
-        checkReleaseBuilds = ciBuildNumber == 0
     }
 
     buildFeatures { compose = true; buildConfig = true }
     providers.gradleProperty("installedReleaseNotesDir").orNull?.let {
         sourceSets.getByName("main").assets.srcDir(it)
     }
-    val packagedNeteaseLibraries = mapOf(
-        "libncmusbaudio.so" to "150daa62df3b2f5a9b9bb5d54a3108e90495e50853c4b5ac7df3f63137f70a7a",
-        "libc++_shared.so" to "3e6d529147ffd66bd31fab85c8902b526abd1c06e43554ce64b97519e255e4b3")
-    packagedNeteaseLibraries.forEach { (name, expected) ->
-        val binary = file("src/main/jniLibs/arm64-v8a/$name")
-        check(binary.isFile && MessageDigest.getInstance("SHA-256").digest(binary.readBytes())
-            .joinToString("") { "%02x".format(it.toInt() and 255) } == expected) {
-            "Bundled NetEase runtime failed verification: $name"
+    sourceSets.getByName("main").jniLibs.setSrcDirs(if (originalEffectsBundled) listOf(file("src/main/jniLibs")) else emptyList<File>())
+    if (originalEffectsBundled) {
+        val pinned = mapOf(
+            "libncmusbaudio.so" to "150daa62df3b2f5a9b9bb5d54a3108e90495e50853c4b5ac7df3f63137f70a7a",
+            "libneaudioeffects.so" to "3f8e2eec659080cb8e90bbfc672d327a180e4e0b6c051818e38625c5f01fcbd1",
+            "libc++_shared.so" to "3e6d529147ffd66bd31fab85c8902b526abd1c06e43554ce64b97519e255e4b3",
+            "libMNN.so" to "be7ad29454cfeecfb30399e32c3f600f963e69c7dd914f0001021fc78435249d",
+            "libMNN_Express.so" to "e095c40a22d3dbb83894c74b3735db857e5137079109cab25797864921d4de57",
+            "libCore_MNN_JNI.so" to "fec5363885343072c9aaf395a8560b217def8600404fa2ab9c940509215e0bef")
+        pinned.forEach { (name, expected) ->
+            val binary = originalEffectsLibs.resolve(name)
+            check(binary.isFile && MessageDigest.getInstance("SHA-256").digest(binary.readBytes())
+                .joinToString("") { "%02x".format(it.toInt() and 255) } == expected) {
+                "Bundled NetEase library failed verification: $name"
+            }
         }
     }
     if (providers.gradleProperty("neteaseOriginalTestAssets").orNull == "true") {
@@ -146,7 +141,8 @@ android {
     // Stripping them would invalidate their ABI/hash contract. Our own JNI libraries can
     // be stripped normally; their symbol artifacts remain in the build output.
     packaging.jniLibs.keepDebugSymbols += setOf(
-        "**/libncmusbaudio.so", "**/libc++_shared.so")
+        "**/libncmusbaudio.so", "**/libneaudioeffects.so", "**/libc++_shared.so",
+        "**/libMNN.so", "**/libMNN_Express.so", "**/libCore_MNN_JNI.so")
 }
 
 baselineProfile {
@@ -190,6 +186,7 @@ dependencies {
     implementation("androidx.credentials:credentials:1.6.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    implementation("androidx.javascriptengine:javascriptengine:1.1.1")
     implementation("org.mozilla:rhino:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
@@ -200,8 +197,10 @@ dependencies {
     implementation("androidx.room:room-runtime:2.8.5")
     implementation("androidx.room:room-ktx:2.8.5")
     ksp("androidx.room:room-compiler:2.8.5")
+    implementation(project(":bilight"))
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.11.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.11.1")
     implementation("androidx.media3:media3-session:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.11.1")
@@ -221,19 +220,18 @@ dependencies {
     implementation("com.materialkolor:material-color-utilities:4.1.1")
 
     implementation("androidx.navigation3:navigation3-runtime:1.1.4")
-    implementation("androidx.navigationevent:navigationevent-compose:1.2.0")
-    implementation("androidx.datastore:datastore-preferences:1.3.0")
+    implementation("androidx.navigationevent:navigationevent-compose:1.1.2")
+    implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.work:work-runtime-ktx:2.12.0")
     implementation("net.jthink:jaudiotagger:3.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.eclipse.paho:org.eclipse.paho.mqttv5.client:1.2.5")
 
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20260814")
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.work:work-testing:2.12.0")

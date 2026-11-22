@@ -5,8 +5,6 @@ import io.github.currencortex.music.data.binding.BindingState
 import io.github.currencortex.music.data.library.LibraryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
@@ -28,7 +26,6 @@ class NeteaseSongActionsRepository(private val api: ApiClient, private val now: 
     val revision = MutableStateFlow(0L)
     val likedState = MutableStateFlow<Set<Long>>(emptySet())
     private val reads = SessionReadCache(session, { 0L })
-    private val likeWriteMutex = Mutex()
     private data class LikedSnapshot(val uid: Long, val ids: Set<Long>)
     private data class WriteKey(val session: RequestSession, val uid: Long, val id: Long)
     private data class ConfirmedLike(val liked: Boolean, val until: Long)
@@ -39,7 +36,6 @@ class NeteaseSongActionsRepository(private val api: ApiClient, private val now: 
         val code = (value as? JsonObject)?.get("code")?.jsonPrimitive?.intOrNull
         if (code != null && code != 200) throw ApiException(when {
             code in listOf(301, 401) -> ErrorKind.NeteaseBindingRequired
-            code == 405 -> ErrorKind.NeteaseRateLimited
             code == 429 -> ErrorKind.RateLimited
             code == 403 -> ErrorKind.Forbidden
             path == "playmode/intelligence/list" && code == 400 &&
@@ -149,18 +145,16 @@ class NeteaseSongActionsRepository(private val api: ApiClient, private val now: 
     suspend fun isLiked(id: Long, fresh: Boolean = false): Boolean = id in likedIds(fresh)
     suspend fun toggleLiked(id: Long, song: Song? = null): Boolean {
         val expected = session()
-        val uid = boundUid(expected)
         val desired = !isLiked(id, fresh = true)
         if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
-        setLiked(id, desired, expected, song, expectedUid = uid)
+        setLiked(id, desired, expected, song)
         return desired
     }
     suspend fun boundUid(expected: RequestSession = session()): Long = binding(expected).profile!!.uid
     suspend fun setLiked(id: Long, liked: Boolean, expected: RequestSession = session(), song: Song? = null,
-        expectedUid: Long? = null) = likeWriteMutex.withLock {
+        expectedUid: Long? = null) {
         val bound = binding(expected)
         if (expectedUid != null && expectedUid != bound.profile!!.uid) throw ApiException(ErrorKind.NeteaseSessionChanged)
-        if (expected != session()) throw ApiException(ErrorKind.NeteaseSessionChanged)
         val response = try {
             api.request("POST", "ncmbind/like/$id", query = mapOf("timestamp" to "${System.currentTimeMillis()}"), body = buildJsonObject {
                 LibraryRepository.metadata(song ?: Song(id, "")).forEach { (key, value) -> put(key, value) }
@@ -174,7 +168,6 @@ class NeteaseSongActionsRepository(private val api: ApiClient, private val now: 
         val code = (response as? JsonObject)?.get("code")?.jsonPrimitive?.intOrNull
         if (code != null && code != 200) throw ApiException(when (code) {
             301, 401 -> ErrorKind.NeteaseBindingRequired
-            405 -> ErrorKind.NeteaseRateLimited
             403 -> ErrorKind.Forbidden
             429 -> ErrorKind.RateLimited
             else -> ErrorKind.Server
@@ -230,17 +223,8 @@ class NeteaseSongActionsRepository(private val api: ApiClient, private val now: 
                 (info["dt"] ?: info["duration"])?.jsonPrimitive?.longOrNull ?: 0,
                 (info["mv"] ?: info["mvid"])?.jsonPrimitive?.longOrNull ?: 0,
                 artists.mapNotNull { it["id"]?.jsonPrimitive?.longOrNull },
-                albumId = album?.get("id")?.jsonPrimitive?.longOrNull ?: 0,
-                translatedName = names(info, "tns", "transNames").firstOrNull().orEmpty(),
-                aliases = names(info, "alia", "alias").filterNot { it.equals(name, ignoreCase = true) })
+                albumId = album?.get("id")?.jsonPrimitive?.longOrNull ?: 0)
         }
-        private fun names(info: JsonObject, vararg keys: String) = keys.flatMap { key ->
-            when (val value = info[key]) {
-                is JsonArray -> value.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-                is JsonPrimitive -> listOfNotNull(value.contentOrNull)
-                else -> emptyList()
-            }
-        }.map(String::trim).filter(String::isNotBlank).distinct()
     }
 }
 

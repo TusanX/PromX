@@ -28,7 +28,7 @@ internal val desktopIslandArtistStyle = TextStyle(fontSize = 9.sp)
         fun width(value: String, style: TextStyle) = with(density) {
             measurer.measure(AnnotatedString(islandSingleLine(value)), style, softWrap = false, maxLines = 1).size.width.toDp().value
         }
-        val name = song?.name?.takeIf(String::isNotBlank) ?: "CurrentMusic"
+        val name = song?.name?.takeIf(String::isNotBlank) ?: "Prom"
         val artist = song?.artists.orEmpty()
         val titleLayout = measurer.measure(AnnotatedString(islandSingleLine(name)), desktopIslandTitleStyle.copy(fontFamily = customFont),
             softWrap = false, maxLines = 1)

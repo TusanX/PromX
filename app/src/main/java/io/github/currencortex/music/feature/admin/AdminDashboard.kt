@@ -81,17 +81,17 @@ internal fun LazyListScope.adminOverview(state: AdminState) {
 internal fun LazyListScope.adminClients(state: AdminState) {
     val clients = state.clients ?: return
     val current = clients.obj("current"); val cmx = clients.obj("cmx"); val apk = cmx.obj("apk")
-    item { AdminCard("CurrentMusic", "网页与原版客户端") {
+    item { AdminCard("Prom", "网页与原版客户端") {
         AdminBadge("v${current.text("version")}"); AdminMetric("安装包", adminBytes(current.number("size")))
         AdminMetric("发布于", adminTime(current.number("publishedAt") ?: 0)); AdminMetric("镜像", if (current.flag("mirrored")) "已同步" else "未同步")
     } }
-    item { AdminCard("CurrentMusicX", "原生 Android 客户端") {
+    item { AdminCard("PromX", "原生 Android 客户端") {
         AdminBadge("v${cmx.text("version")}"); AdminMetric("安装包", adminBytes(apk.number("size")))
         AdminMetric("下载次数", adminCount(apk.number("downloads"))); AdminMetric("镜像", if (apk.flag("mirrored")) "已同步" else "未同步")
         AdminMetric("发布于", adminTime(cmx.number("publishedAt") ?: 0))
     } }
-    if (cmx.text("body").isNotBlank()) item { AdminExpandable("CurrentMusicX 更新说明", cmx.text("name"), "admin_cmx_notes") { MarkdownText(cmx.text("body"), compact = true) } }
-    if (current.text("changelog").isNotBlank()) item { AdminExpandable("CurrentMusic 更新说明", current.text("version"), "admin_current_notes") { MarkdownText(current.text("changelog"), compact = true) } }
+    if (cmx.text("body").isNotBlank()) item { AdminExpandable("PromX 更新说明", cmx.text("name"), "admin_cmx_notes") { MarkdownText(cmx.text("body"), compact = true) } }
+    if (current.text("changelog").isNotBlank()) item { AdminExpandable("Prom 更新说明", current.text("version"), "admin_current_notes") { MarkdownText(current.text("changelog"), compact = true) } }
     if (cmx.rows("history").isNotEmpty()) item { AdminCard("各版本下载量", "GitHub 累计 · 最近 ${cmx.rows("history").size} 个版本") {
         val releases = cmx.rows("history").reversed()
         AdminChart(releases.map { it.number("apkDownloads") ?: 0 }, "下载次数", releases.map { it.text("version") }, tag = "admin_chart_downloads")

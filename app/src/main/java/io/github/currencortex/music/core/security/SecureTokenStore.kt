@@ -33,7 +33,7 @@ class SecureTokenStore(context: Context, storageSuffix: String = "") : TokenStor
     private val cipher by lazy { synchronized(keyLock) {
         // All session files share one alias. Concurrent first-time stores must not
         // generate competing keys and leave one account encrypted with the replaced key.
-        val alias = "CurrentMusic.Session"
+        val alias = "Prom.Session"
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val key = (store.getKey(alias, null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
             init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)

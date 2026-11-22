@@ -6,6 +6,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -51,7 +54,7 @@ import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import kotlin.coroutines.coroutineContext
 
-private const val BRAND = "Current Music"
+private const val BRAND = "音乐"
 private const val CLASSIC_MAX_DURATION_MS = 5_000L
 private const val CLASSIC_FLIGHT_DURATION_MS = 1_350L
 private val brandStyle = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
@@ -136,7 +139,7 @@ private fun curve(start: Offset, control: Offset, end: Offset, progress: Float):
     val layout = measurer.measure(BRAND, brandStyle.copy(fontFamily = io.github.currencortex.music.ui.theme.LocalCustomFont.current ?: FontFamily.SansSerif))
     val displayDensity = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize().testTag("launch_animation")
-        .clearAndSetSemantics { contentDescription = "Current Music 正在打开" }
+        .clearAndSetSemantics { contentDescription = "PromX 正在打开" }
         .onGloballyPositioned { origin = it.boundsInRoot().topLeft }
         .skipLaunchOnDoubleTap(finish)) {
         BgEffectBackground(dynamicBackground = effectBackground && !reducedMotion,

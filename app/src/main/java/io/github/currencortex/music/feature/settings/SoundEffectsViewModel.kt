@@ -25,6 +25,7 @@ import kotlinx.serialization.json.*
 
 data class SoundCatalogState(val loading: Boolean = true, val items: List<NeteaseSoundEffect> = emptyList(),
     val error: String? = null)
+data class OriginalEngineImportState(val loading: Boolean = false, val message: String? = null, val failed: Boolean = false)
 data class NativeEffectsPageState(val loading: Boolean = true, val banner: List<NativeEffectTile> = emptyList(),
     val featured: List<NativeEffectTile> = emptyList(), val error: String? = null)
 enum class SoundEffectKind { AI_MASTER, SPEAKER, MOOD, SMART, ORIGINAL, LOCAL_SMART, MANUAL }
@@ -72,21 +73,18 @@ class SoundEffectsViewModel(private val container: AppContainer) : ViewModel() {
     val originalMood = container.originalMoodEffects.state
     val originalAiMaster = container.originalAiMasterEffects.state
     val originalSpeaker = container.originalSpeakerEffects.state
-    internal val originalEffectsAssets = container.originalEffectsAssets.state
-    internal val originalEffectsEngineReady = container.originalEffectsEngineReady
-    internal val originalImport = container.originalEffectsInstall
-    internal val originalEffectsReady = container.originalEffectsReady
-    val updateSettings = container.updateSettings.state
     val catalog = MutableStateFlow(SoundCatalogState())
     val page = MutableStateFlow(NativeEffectsPageState())
     val more = MutableStateFlow(NativeEffectsPageState())
     val tileLoading = MutableStateFlow<Long?>(null)
     val actionError = MutableStateFlow<String?>(null)
+    val originalImport = MutableStateFlow(OriginalEngineImportState())
     val lastSelection = MutableStateFlow(SoundEffectSelection())
     private var feedbackRequest: Job? = null
     private var feedbackToken: Long? = null
     private var userSelected = false
     private var request: Job? = null
+    private var importRequest: Job? = null
     private var localRequest: Job? = null
     private var pageRequest: Job? = null
     private var moreRequest: Job? = null
@@ -116,24 +114,14 @@ class SoundEffectsViewModel(private val container: AppContainer) : ViewModel() {
             } }.collect { if (!userSelected && it != null) lastSelection.value = it }
         }
         viewModelScope.launch {
-            combine(originalEffectsReady, container.neteaseSessions.state.map { it.revision }.distinctUntilChanged()) { ready, revision ->
-                ready to revision
-            }.collect { (ready, _) ->
+            container.neteaseSessions.state.map { it.revision }.distinctUntilChanged().collect {
                 if (userSelected) clearFeedback()
                 cancelTile()
                 moreRequest?.cancel()
                 more.value = NativeEffectsPageState()
                 page.value = NativeEffectsPageState()
-                if (ready) {
-                    refreshCatalog()
-                    refreshPage()
-                    if (moreVisited) refreshMore()
-                } else {
-                    request?.cancel()
-                    pageRequest?.cancel()
-                    catalog.value = SoundCatalogState()
-                    moreVisited = false
-                }
+                refreshCatalog(); refreshPage()
+                if (moreVisited) refreshMore()
             }
         }
     }
@@ -167,7 +155,6 @@ class SoundEffectsViewModel(private val container: AppContainer) : ViewModel() {
         else -> SoundEffectNoticeResult(SoundEffectNoticePhase.READY, if (active) "音效已生效" else "已开启，播放后生效")
     }
     fun refreshMore() {
-        if (!originalEffectsReady.value) return
         moreVisited = true
         moreRequest?.cancel()
         moreRequest = viewModelScope.launch {
@@ -181,7 +168,6 @@ class SoundEffectsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
     fun refreshPage() {
-        if (!originalEffectsReady.value) return
         pageRequest?.cancel()
         pageRequest = viewModelScope.launch {
             page.value = page.value.copy(loading = true, error = null)
@@ -243,7 +229,6 @@ class SoundEffectsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
     fun refreshCatalog() {
-        if (!originalEffectsReady.value) return
         request?.cancel()
         request = viewModelScope.launch {
             catalog.value = catalog.value.copy(loading = true, error = null)
@@ -399,13 +384,22 @@ class SoundEffectsViewModel(private val container: AppContainer) : ViewModel() {
     }
     fun originalUnavailableReason(effect: NeteaseSoundEffect): String? =
         originalEffectUnavailableReason(effect, original.value)
-    fun importOriginal(uri: android.net.Uri) = container.importOriginalApk(uri)
-    fun importInstalledOriginal() = container.importInstalledOriginal()
-    fun downloadOriginalEffects() = container.downloadOriginalEffects()
-    fun removeOriginalEffects() {
-        clearFeedback()
-        cancelTile()
-        container.removeOriginalEffects()
+    fun importOriginal(uri: android.net.Uri) = importEngine { container.importOriginalApk(uri) }
+    fun importInstalledOriginal() = importEngine { container.importInstalledOriginal() }
+    private fun importEngine(action: suspend () -> Unit) {
+        if (importRequest?.isActive == true) return
+        importRequest = viewModelScope.launch {
+            originalImport.value = OriginalEngineImportState(loading = true, message = "正在校验并导入音效引擎…")
+            try {
+                action()
+                container.refreshOriginalEngine()
+                originalImport.value = OriginalEngineImportState(message = "音效引擎已导入，可以选择原版音效")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                originalImport.value = OriginalEngineImportState(message = failure.message?.take(180)
+                    ?: "音效引擎导入失败，请选择兼容的网易云音乐安装包", failed = true)
+            }
+        }
     }
     fun useLocal(preset: EqualizerPreset) {
         cancelTile()

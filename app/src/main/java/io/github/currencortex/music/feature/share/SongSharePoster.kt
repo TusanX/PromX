@@ -59,7 +59,7 @@ internal object SongSharePoster {
             paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
             canvas.drawText(text, x, y, paint)
         }
-        label("CurrentMusic", 90f, 112f, 40f, Color.WHITE, true)
+        label("Prom", 90f, 112f, 40f, Color.WHITE, true)
         label("MUSIC SHARE", 90f, 154f, 22f, 0x88ffffff.toInt(), true)
         if (style == SongShareStyle.SQUARE) {
             val artwork = RectF(230f, 180f, 850f, 800f)
@@ -89,7 +89,7 @@ internal object SongSharePoster {
         canvas.drawLine(90f, 1100f, 990f, 1100f, paint)
         val url = content.publicUrl
         val footerWidth = if (url == null) 900 else 590
-        drawParagraph(canvas, paragraph(if (url == null) "由 CurrentMusicX 分享" else "在 CurrentMusic 收听",
+        drawParagraph(canvas, paragraph(if (url == null) "由 PromX 分享" else "在 Prom 收听",
             26f, footerWidth, 1, 0xafffffff.toInt()), 90f, 1150f)
         if (url != null) {
             val qr = qr(url)
@@ -101,7 +101,7 @@ internal object SongSharePoster {
             drawParagraph(canvas, paragraph(url.removePrefix("https://"), 24f, footerWidth, 2,
                 0xddffffff.toInt(), monospace = true), 90f, 1198f)
             label("扫码或访问链接", 90f, 1290f, 22f, 0x99ffffff.toInt())
-            drawParagraph(canvas, paragraph("也可打开 CurrentMusicX 搜索歌名收听", 21f, footerWidth, 2,
+            drawParagraph(canvas, paragraph("也可打开 PromX 搜索歌名收听", 21f, footerWidth, 2,
                 0x88ffffff.toInt()), 90f, 1320f)
         } else {
             drawParagraph(canvas, paragraph("${content.title} · ${content.artists}", 26f,

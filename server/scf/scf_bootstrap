@@ -1,0 +1,12 @@
+#!/bin/bash
+# 探测 node 可执行文件（不同运行时镜像路径不同），找到就起服务
+for p in /var/lang/node18/bin/node /var/lang/node20/bin/node /var/lang/node/bin/node \
+         /usr/local/bin/node /usr/bin/node /opt/node/bin/node; do
+  if [ -x "$p" ]; then
+    exec "$p" /var/user/server.mjs
+  fi
+done
+P=$(command -v node 2>/dev/null)
+if [ -n "$P" ]; then exec "$P" /var/user/server.mjs; fi
+echo "node not found in image" >&2
+exit 1

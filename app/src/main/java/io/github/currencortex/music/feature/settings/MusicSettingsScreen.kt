@@ -12,42 +12,30 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.currencortex.music.core.network.CurrentMusicServer
-import io.github.currencortex.music.data.lx.LxPlatform
 import io.github.currencortex.music.data.settings.AudioProvider
 import io.github.currencortex.music.data.settings.LyricsSource
-import io.github.currencortex.music.data.settings.MusicPlatform
 import io.github.currencortex.music.ui.component.MusicDestinationRow
-import io.github.currencortex.music.ui.component.MusicChoiceDialog
-import io.github.currencortex.music.ui.component.MusicDialogButton
 import io.github.currencortex.music.ui.component.MusicIcons
 import io.github.currencortex.music.ui.component.MusicTextAction
 import io.github.currencortex.music.ui.component.nativeui.*
 import top.yukonga.miuix.kmp.basic.TextField
 
 /** Sources and connections only; playback and other settings each have one owner. */
-@Composable fun MusicSettingsScreen(vm: MusicSettingsViewModel, onNavidrome: () -> Unit = {}, onEmby: () -> Unit = {},
-    onLogin: () -> Unit = {}) {
+@Composable fun MusicSettingsScreen(vm: MusicSettingsViewModel, onNavidrome: () -> Unit = {}, onEmby: () -> Unit = {}) {
     SettingsUiScope {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val state by vm.state.collectAsStateWithLifecycle()
     val provider by vm.audioProvider.collectAsStateWithLifecycle()
     val audioState by vm.audioState.collectAsStateWithLifecycle()
-    val catalog by vm.serverAudioCatalog.collectAsStateWithLifecycle()
     val automatic by vm.automaticServer.collectAsStateWithLifecycle()
     // Never save a credential in a Bundle.
     var audioKey by remember { mutableStateOf("") }
     var serverDialogOpen by rememberSaveable { mutableStateOf(false) }
     var customServerOpen by rememberSaveable { mutableStateOf(false) }
-    var removeServerSource by remember { mutableStateOf(false) }
-    DisposableEffect(vm) { onDispose { vm.closeServerAudioCatalog() } }
     SettingsPage("音源与网络", "network_settings") {
         item("source") { SettingsSection("音乐音源", MusicIcons.Headphones) {
-            val serverSource = provider.serverSource
-            val options = AudioProvider.entries.filter { it != AudioProvider.SERVER || serverSource != null }
-            val selected = if (provider.provider == AudioProvider.SERVER) serverSource?.name ?: provider.provider.label else provider.provider.label
-            SettingsOptionsRow("音源", selected, options.map { entry ->
-                val label = if (entry == AudioProvider.SERVER) serverSource?.name ?: entry.label else entry.label
-                SettingsOption("audio_provider_${entry.name.lowercase()}", label, provider.provider == entry,
+            SettingsOptionsRow("音源", provider.provider.label, AudioProvider.entries.map { entry ->
+                SettingsOption("audio_provider_${entry.name.lowercase()}", entry.label, provider.provider == entry,
                     onSelect = { audioKey = ""; vm.audioProvider(entry) })
             }, Modifier.testTag("audio_provider"), enabled = !audioState.busy)
             AnimatedVisibility(provider.provider == AudioProvider.LEIZ,
@@ -66,37 +54,26 @@ import top.yukonga.miuix.kmp.basic.TextField
                     }
                 }
             }
-            SettingsDivider()
-            SettingsPreference("从服务器导入", "获取当前 CurrentMusic 服务器提供的音源",
-                Modifier.testTag("server_audio_import"), enabled = !audioState.busy, onClick = vm::openServerAudioCatalog)
-            if (serverSource != null) {
-                SettingsDivider()
-                SettingsPreference("移除已导入音源", serverSource.name, Modifier.testTag("server_audio_remove"),
-                    enabled = !audioState.busy, onClick = { removeServerSource = true })
-            }
-            if (provider.provider != AudioProvider.LX) audioState.message?.let { SettingsHint(it) }
+            if (provider.provider != AudioProvider.LX) audioState.message?.let { SettingsHint(it, error = !audioState.busy) }
         } }
-        if (provider.provider == AudioProvider.LX) item("lx_sources") {
-            val platform = if (settings.musicPlatform == MusicPlatform.QQ_MUSIC) LxPlatform.QQ_MUSIC else LxPlatform.NETEASE
-            LxSourceSettings(vm, platform)
-        }
+        if (provider.provider == AudioProvider.LX) item("lx_sources") { LxSourceSettings(vm) }
         item("lyrics") { SettingsSection("歌词来源", MusicIcons.File) {
             SettingsOptionsRow("默认来源", when (settings.lyricsSource) {
                 LyricsSource.AUTO -> "自动择优"
-                LyricsSource.CURRENT_MUSIC -> "CurrentMusic"
+                LyricsSource.CURRENT_MUSIC -> "Prom"
                 LyricsSource.NETEASE -> "网易云"
                 LyricsSource.LOCAL -> "本地内嵌"
             }, LyricsSource.entries.map { source ->
                 SettingsOption("lyrics_source_${source.name.lowercase()}", source.label, source == settings.lyricsSource,
                     summary = when (source) {
                         LyricsSource.AUTO -> "信息匹配 ≥75% · QQ 优先查找真实逐字"
-                        LyricsSource.CURRENT_MUSIC -> "CurrentMusic · LDDC 真实逐字"
+                        LyricsSource.CURRENT_MUSIC -> "Prom · LDDC 真实逐字"
                         LyricsSource.NETEASE -> "手机直连网易云逐字或逐行歌词"
                         LyricsSource.LOCAL -> "离线读取本地音频文件内的歌词"
                     }, onSelect = { vm.lyricsSource(source) })
             }, Modifier.testTag("lyrics_source"))
         } }
-        item("server") { SettingsSection("CurrentMusic 服务", MusicIcons.Storage) {
+        item("server") { SettingsSection("Prom 服务", MusicIcons.Storage) {
             MusicDestinationRow("服务器线路", { serverDialogOpen = true }, Modifier.testTag("server_source"),
                 summary = when (settings.serverMode) {
                     CurrentMusicServer.AUTO -> "自动 · ${CurrentMusicServer.presets.firstOrNull { it.url == automatic }?.label.orEmpty()}"
@@ -119,23 +96,5 @@ import top.yukonga.miuix.kmp.basic.TextField
     })
     if (customServerOpen) CustomMusicServerDialog(settings.customServer, state, onSave = { vm.server(it) },
         onDismiss = { customServerOpen = false })
-    catalog?.let {
-        ServerAudioSourceDialog(it, vm::closeServerAudioCatalog, vm::openServerAudioCatalog, vm::importServerAudioSource) {
-            vm.closeServerAudioCatalog()
-            onLogin()
-        }
-    }
-    if (removeServerSource) {
-        val dismiss = { removeServerSource = false }
-        MusicChoiceDialog("移除已导入音源？", dismiss, footer = {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MusicDialogButton("取消", dismiss, Modifier.weight(1f))
-                MusicDialogButton("移除", { dismiss(); vm.removeServerAudioSource() }, Modifier.weight(1f),
-                    destructive = true)
-            }
-        }) {
-            SettingsHint("若正在使用此音源，移除后切回平台直连。")
-        }
-    }
     }
 }

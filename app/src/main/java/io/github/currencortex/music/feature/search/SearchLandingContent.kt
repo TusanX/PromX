@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.currencortex.music.data.local.SearchHistoryEntity
 import io.github.currencortex.music.data.song.Song
+import io.github.currencortex.music.data.song.MusicSource
 import io.github.currencortex.music.ui.component.*
 import io.github.currencortex.music.ui.component.nativeui.*
 import top.yukonga.miuix.kmp.basic.*
@@ -32,7 +33,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun SearchLandingContent(history: List<SearchHistoryEntity>, landing: SearchLandingState,
-    charts: SearchChartsState, recommendations: List<Song>, recent: List<Song>, onSearch: (String) -> Unit,
+    charts: SearchChartsState, recommendations: List<Song>, recent: List<Song>, source: MusicSource, onSearch: (String) -> Unit,
     onClearHistory: () -> Unit, onDeleteHistory: (String) -> Unit, onRetryHot: () -> Unit, onRetryCharts: () -> Unit,
     onLoadChart: (String, Boolean) -> Unit, roomSearch: Boolean) {
     val colors = MiuixTheme.colorScheme
@@ -88,7 +89,16 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             val carousel = rememberLazyListState()
             LazyRow(Modifier.fillMaxWidth().testTag("search_rankings"), state = carousel,
                 flingBehavior = rememberSnapFlingBehavior(carousel), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (charts.charts.isEmpty()) item(key = "hot") {
+                if (source != MusicSource.NETEASE) item(key = "source_hot") {
+                    val label = if (source == MusicSource.QQ_MUSIC) "QQ 热歌" else "B站推荐"
+                    SearchRankingCard(label, "来自当前音乐来源", Modifier.width(cardWidth).testTag("search_source_rankings")) {
+                        if (recommendations.isEmpty()) {
+                            Text("回到首页刷新推荐后再来搜索", fontSize = 13.sp, color = colors.onSurface.copy(alpha = .5f))
+                        } else recommendations.distinctBy { it.name }.take(8).forEachIndexed { index, song ->
+                            RankingRow(index, song.name, song.artists) { onSearch(song.name) }
+                        }
+                    }
+                } else if (charts.charts.isEmpty()) item(key = "hot") {
                     SearchRankingCard("热搜榜", "大家正在搜", Modifier.width(cardWidth)) {
                         if (landing.loading) LoadingTextList(3)
                         else if (landing.error != null) { Text("热搜暂时不可用", fontSize = 13.sp); MusicTextAction("重新加载", onRetryHot, Modifier.testTag("search_hot_retry")) }
@@ -98,7 +108,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                         }
                     }
                 }
-                items(charts.charts, key = { it.id }) { chart ->
+                if (source == MusicSource.NETEASE) items(charts.charts, key = { it.id }) { chart ->
                     LaunchedEffect(chart.id) { onLoadChart(chart.id, false) }
                     val page = charts.pages[chart.id] ?: SearchChartPage(loading = true)
                     SearchRankingCard(chart.name, "", Modifier.width(cardWidth).testTag("search_chart_${chart.id}")) {
@@ -112,7 +122,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                         }
                     }
                 }
-                if (charts.error != null) item(key = "charts_status") {
+                if (source == MusicSource.NETEASE && charts.error != null) item(key = "charts_status") {
                     SearchRankingCard("音乐榜单", "", Modifier.width(cardWidth)) {
                         if (charts.loading) LoadingTextList(3)
                         else { Text("榜单暂时不可用", fontSize = 13.sp); MusicTextAction("重新加载", onRetryCharts) }

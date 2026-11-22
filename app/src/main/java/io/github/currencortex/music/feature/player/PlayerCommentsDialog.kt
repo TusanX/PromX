@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -35,6 +36,7 @@ import io.github.currencortex.music.data.song.NeteaseComment
 import io.github.currencortex.music.data.song.CommentSort
 import io.github.currencortex.music.ui.component.MusicDialog
 import io.github.currencortex.music.ui.component.DecoratedAvatar
+import io.github.currencortex.music.ui.component.MusicBottomSheet
 import io.github.currencortex.music.ui.component.MusicOverlayDialog
 import io.github.currencortex.music.ui.component.MusicPlaceholder
 import top.yukonga.miuix.kmp.basic.*
@@ -49,7 +51,7 @@ import kotlinx.coroutines.flow.drop
     composer: PlayerCommentComposer = PlayerCommentComposer(), edit: () -> Unit = {}, reply: (NeteaseComment?) -> Unit = {}, send: () -> Unit = {},
     sort: (CommentSort) -> Unit = {}, replies: (NeteaseComment, Boolean) -> Unit = { _, _ -> },
     like: (NeteaseComment) -> Unit = {}, delete: (NeteaseComment) -> Unit = {},
-    title: String = "网易云评论", fallbackUser: String = "网易云用户") {
+    title: String = "网易云评论") {
     val colors = io.github.currencortex.music.ui.component.musicDialogColors()
     val indication = LocalIndication.current
     val density = LocalDensity.current
@@ -103,7 +105,7 @@ import kotlinx.coroutines.flow.drop
             val rows = if (showHot) state.hot else state.latest
             LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("player_comments_list"),
                 state = if (showHot) hotScroll else latestScroll, contentPadding = PaddingValues(bottom = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                verticalArrangement = Arrangement.spacedBy(22.dp)) {
                 if (state.loading && rows.isEmpty()) items(3) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         MusicPlaceholder(Modifier.size(36.dp))
@@ -117,7 +119,7 @@ import kotlinx.coroutines.flow.drop
                     var expandedReplies by rememberSaveable(state.songId, state.sort, comment.id) { mutableStateOf(false) }
                     val actionsEnabled = !composer.sending && !state.loading && state.busy.isEmpty() && state.replies.values.none { it.loading }
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CommentContent(comment, enabled = !composer.sending, fallbackUser = fallbackUser,
+                        CommentContent(comment, enabled = !composer.sending,
                             enhanced = state.enhanced == true, busy = !actionsEnabled || comment.id in state.busy,
                             own = state.meUid != 0L && state.meUid == comment.userId,
                             like = { like(comment) }, delete = { deleting = comment }) { reply(comment); focusReply++ }
@@ -130,7 +132,7 @@ import kotlinx.coroutines.flow.drop
                                 val floor = state.replies[comment.id]
                                 if (floor == null) CommentAction("加载回复", "load_replies_${comment.id}", !state.loading && state.busy.isEmpty()) { replies(comment, false) }
                                 floor?.comments?.forEach { child -> key(child.id) {
-                                    CommentContent(child, !composer.sending, enhanced = true, fallbackUser = fallbackUser,
+                                    CommentContent(child, !composer.sending, enhanced = true,
                                         busy = !actionsEnabled || child.id in state.busy,
                                         own = state.meUid != 0L && state.meUid == child.userId,
                                         like = { like(child) }, delete = { deleting = child }) { reply(child); focusReply++ }
@@ -164,7 +166,7 @@ import kotlinx.coroutines.flow.drop
                     }
                 }
                 if (!showHot && rows.isNotEmpty() && !state.more && !state.loading && state.error == null) item {
-                    Text("已显示全部评论", Modifier.fillMaxWidth().padding(vertical = 8.dp), fontSize = 12.sp,
+                    Text("已显示全部评论", Modifier.fillMaxWidth().padding(vertical = 10.dp), fontSize = 11.5.sp,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = colors.onSurfaceVariantSummary)
                 }
             }
@@ -174,7 +176,7 @@ import kotlinx.coroutines.flow.drop
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.onSurface.copy(alpha = .04f)).padding(start = 12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text("回复 ${comment.user.nickname.ifBlank { fallbackUser }}", fontSize = 12.sp, color = colors.primary)
+                        Text("回复 ${comment.user.nickname.ifBlank { "网易云用户" }}", fontSize = 12.sp, color = colors.primary)
                         Text(comment.content, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onSurfaceVariantSummary)
                     }
                     CommentAction("取消", "cancel_comment_reply", !composer.sending) { reply(null) }
@@ -221,41 +223,40 @@ import kotlinx.coroutines.flow.drop
 
 @Composable private fun CommentAction(title: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
     Text(title, Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-        .testTag(tag).padding(horizontal = 10.dp, vertical = 12.dp), fontSize = 13.sp,
+        .testTag(tag).padding(horizontal = 10.dp, vertical = 10.dp), fontSize = 13.sp,
         color = MiuixTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else .45f))
 }
 
 @Composable private fun CommentContent(comment: NeteaseComment, enabled: Boolean, enhanced: Boolean = false,
-    busy: Boolean = false, own: Boolean = false, fallbackUser: String = "网易云用户",
-    like: () -> Unit = {}, delete: () -> Unit = {}, reply: () -> Unit) {
+    busy: Boolean = false, own: Boolean = false, like: () -> Unit = {}, delete: () -> Unit = {}, reply: () -> Unit) {
     val colors = io.github.currencortex.music.ui.component.musicDialogColors()
     var expanded by rememberSaveable(comment.id) { mutableStateOf(false) }
     var overflow by remember(comment.content) { mutableStateOf(false) }
     val time = remember(comment.time) {
         if (comment.time > 0) SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(comment.time)) else ""
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        DecoratedAvatar(comment.user.avatarUrl.takeIf { it.isNotBlank() }, null, size = 34.dp)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        DecoratedAvatar(comment.user.avatarUrl.takeIf { it.isNotBlank() }, null, size = 38.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(comment.user.nickname.ifBlank { fallbackUser }, Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    color = colors.onSurfaceVariantSummary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(comment.user.nickname.ifBlank { "用户" }, Modifier.weight(1f), fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
+                    color = colors.onSurface.copy(alpha = .72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (enhanced) CommentAction("${if (comment.likedByMe) "已赞" else "赞"} ${comment.likedCount}",
                     "like_comment_${comment.id}", !busy, like)
                 else if (comment.likedCount > 0) Text("${comment.likedCount} 赞", Modifier.padding(start = 8.dp), fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
             }
             SelectionContainer {
-                Text(comment.content, fontSize = 15.sp, lineHeight = 23.sp, maxLines = if (expanded) Int.MAX_VALUE else 6,
+                Text(comment.content, fontSize = 15.sp, lineHeight = 24.sp, maxLines = if (expanded) Int.MAX_VALUE else 6,
                     overflow = TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflow = it.hasVisualOverflow })
             }
             if (overflow || expanded) CommentAction(if (expanded) "收起" else "展开全文", "expand_comment_${comment.id}") { expanded = !expanded }
             comment.beReplied.firstOrNull()?.let { quote ->
-                Text("${quote.user?.nickname?.ifBlank { fallbackUser } ?: fallbackUser}：${quote.content ?: "原评论已删除"}",
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(colors.onSurface.copy(alpha = .04f)).padding(10.dp),
+                Text("${quote.user?.nickname?.ifBlank { "网易云用户" } ?: "网易云用户"}：${quote.content ?: "原评论已删除"}",
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.onSurface.copy(alpha = .055f)).padding(12.dp),
                     fontSize = 12.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, color = colors.onSurfaceVariantSummary)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(time, Modifier.weight(1f), fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
+                Text(time, Modifier.weight(1f), fontSize = 11.sp, color = colors.onSurface.copy(alpha = .42f))
                 if (enhanced && own) CommentAction("删除", "delete_comment_${comment.id}", !busy, delete)
                 CommentAction("回复", "reply_comment_${comment.id}", enabled, reply)
             }

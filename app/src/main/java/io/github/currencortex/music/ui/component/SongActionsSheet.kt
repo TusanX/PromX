@@ -14,8 +14,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 data class SongMenu(val song: Song, val play: () -> Unit, val next: () -> Unit, val queue: () -> Unit,
     val roomRequest: Boolean = false, val extra: (@Composable () -> Unit)? = null, val transport: Boolean = true,
-    val previewAnchor: androidx.compose.ui.geometry.Rect? = null, val shareInitially: Boolean = false,
-    val onMultiSelect: (() -> Unit)? = null)
+    val previewAnchor: androidx.compose.ui.geometry.Rect? = null, val shareInitially: Boolean = false)
 data class RoomSongRequest(val request: (Song) -> Unit, val pending: (Long) -> Boolean)
 val LocalSongMenu = staticCompositionLocalOf<((SongMenu) -> Unit)?> { null }
 val LocalSongDownload = staticCompositionLocalOf<((Song) -> Unit)?> { null }
@@ -37,16 +36,39 @@ val LocalRoomSongRequest = staticCompositionLocalOf<RoomSongRequest?> { null }
                 MusicDestinationRow("下一首播放", { onDismiss(); menu.next() }, chevron = false)
                 MusicDestinationRow("加入队列", { onDismiss(); menu.queue() }, chevron = false)
             }
-            if (!menu.song.video && menu.song.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL && onDownload != null) MusicDestinationRow("下载歌曲", {
-                onDismiss(); onDownload(menu.song)
-            }, modifier = Modifier.testTag("song_download"), summary = "保存歌曲信息、封面与歌词", chevron = false)
+            val biliBvid = menu.song.externalIds.bilibiliBvid?.takeIf { it.isNotBlank() }
+            if (!menu.song.video && menu.song.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL && onDownload != null && biliBvid == null)
+                MusicDestinationRow("下载歌曲", {
+                    onDismiss(); onDownload(menu.song)
+                }, modifier = Modifier.testTag("song_download"), summary = "保存歌曲信息、封面与歌词", chevron = false)
             if (!menu.song.video && menu.song.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL) MusicDestinationRow("分享歌曲", { sharing = true },
                 modifier = Modifier.testTag("song_share"), summary = "生成海报、保存图片或复制链接", chevron = false)
-            CompositionLocalProvider(LocalDismissSongMenu provides onDismiss) { menu.extra?.invoke() }
-            menu.onMultiSelect?.let { select ->
-                MusicDestinationRow("多选", { onDismiss(); select() },
-                    modifier = Modifier.testTag("playlist_multi_select"), chevron = false)
+            // B站 专属入口：跳到视频页 / 复制 BV 号
+            menu.song.externalIds.bilibiliBvid?.takeIf { it.isNotBlank() }?.let { bvid ->
+                val context = androidx.compose.ui.platform.LocalContext.current
+                MusicDestinationRow("在 B站 打开", {
+                    onDismiss()
+                    runCatching {
+                        context.startActivity(android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://www.bilibili.com/video/" + bvid)).apply {
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            setPackage("tv.danmaku.bili")
+                        })
+                    }
+                }, modifier = Modifier.testTag("song_open_bili"), summary = bvid, chevron = false)
+                MusicDestinationRow("下载视频到本地缓存", {
+                    onDismiss()
+                    io.github.currencortex.music.feature.bili.BiliHost.of().download(bvid, menu.song.name)
+                }, modifier = Modifier.testTag("song_download_video"), summary = "存到 App 的 Movies/PromX", chevron = false)
+                MusicDestinationRow("复制 BV 号", {
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("BV", bvid))
+                    onDismiss()
+                }, modifier = Modifier.testTag("song_copy_bv"), chevron = false)
             }
+            CompositionLocalProvider(LocalDismissSongMenu provides onDismiss) { menu.extra?.invoke() }
         }
     }
 }

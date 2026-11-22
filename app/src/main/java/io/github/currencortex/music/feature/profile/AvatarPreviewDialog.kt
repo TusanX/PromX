@@ -113,7 +113,7 @@ import top.yukonga.miuix.kmp.theme.*
                         Card(Modifier.weight(1f)) {
                             MusicDestinationRow(if (saving) "正在保存…" else "保存头像", {
                                 pendingImage = image
-                                try { save.launch("CurrentMusic-avatar-${user.id}.png") }
+                                try { save.launch("Prom-avatar-${user.id}.png") }
                                 catch (_: Exception) { pendingImage = null; context.showMusicError("无法打开保存位置") }
                             }, Modifier.testTag("avatar_preview_save"), enabled = image != null && !saving,
                                 chevron = false)

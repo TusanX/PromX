@@ -5,7 +5,7 @@ import java.net.URI
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
 enum class UpdateSource(val label: String, val prefix: String) {
-    CURRENTMUSIC("CurrentMusic 专用镜像", ""),
+    CURRENTMUSIC("Prom 专用镜像", ""),
     GITHUB("GitHub 原站", ""),
     TBAP("github.tbap.top", "https://github.tbap.top/"),
     GH_PROXY("gh-proxy.com", "https://gh-proxy.com/"),
@@ -23,7 +23,7 @@ enum class UpdateSource(val label: String, val prefix: String) {
         val official = requireNotNull(release.apkUrl) { "此发布没有 APK" }
         require(official.startsWith("${AppMetadata.RELEASES_PROJECT_URL}/releases/download/")) { "更新来源不匹配" }
         if (this == CURRENTMUSIC) {
-            require(!release.isCi) { "CurrentMusic 专用镜像仅提供正式版" }
+            require(!release.isCi) { "Prom 专用镜像仅提供正式版" }
             return proxy.assetUrl(official.toHttpUrl())
         }
         if (prefix.isNotEmpty()) require(prefix.startsWith("https://")) { "下载源必须使用 HTTPS" }
@@ -32,21 +32,6 @@ enum class UpdateSource(val label: String, val prefix: String) {
         require(uri.scheme == "https" && uri.rawUserInfo == null) { "下载源必须使用 HTTPS" }
         return result
     }
-
-    /** Repository files use the updater's selected mirror order; the APK-only dedicated service is skipped. */
-    fun repositoryFileUrl(path: String): String {
-        require(path.startsWith("/") && !path.contains("..")) { "仓库文件路径无效" }
-        val source = if (this == CURRENTMUSIC) GITHUB else this
-        val official = "${AppMetadata.RELEASES_PROJECT_URL}/raw/main$path"
-        val result = source.prefix + official
-        val uri = URI(result)
-        require(uri.scheme == "https" && uri.rawUserInfo == null) { "下载源必须使用 HTTPS" }
-        return result
-    }
-
-    fun repositoryFileFallbacks(): List<UpdateSource> = fallbacks()
-        .filter { it != CURRENTMUSIC }
-        .ifEmpty { listOf(GITHUB) }
 
     companion object {
         val available: List<UpdateSource> get() = entries.filter { it != CURRENTMUSIC || UpdateProxy.current.configured }

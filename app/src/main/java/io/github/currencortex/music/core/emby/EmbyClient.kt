@@ -42,7 +42,7 @@ class EmbyClient(private val access: () -> EmbyAccess?, private val wire: OkHttp
             path.forEach(::addPathSegment); params.forEach { (key, value) -> addQueryParameter(key, value) }
         }.build()
     private fun authenticate(request: Request, account: EmbyAccess) = request.newBuilder()
-        .header("X-Emby-Authorization", "Emby Client=\"CurrentMusicX\", Device=\"Android\", DeviceId=\"${account.deviceId}\", Version=\"1.3.2\"")
+        .header("X-Emby-Authorization", "Emby Client=\"PromX\", Device=\"Android\", DeviceId=\"${account.deviceId}\", Version=\"1.3.2\"")
         .apply { if (account.token.isNotEmpty()) header("X-Emby-Token", account.token) }.build()
 
     suspend fun request(path: List<String>, params: List<Pair<String, String>> = emptyList(),

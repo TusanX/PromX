@@ -65,7 +65,7 @@ internal data class NeteaseListenTogetherActions(
 
 @Composable internal fun NeteaseListenTogetherScreen(container: AppContainer, onBack: () -> Unit,
     onSearch: () -> Unit, onPlayer: () -> Unit, onBinding: (() -> Unit)? = null,
-    onDialogActive: (Boolean) -> Unit = {}, initialInvitation: String? = null) {
+    onDialogActive: (Boolean) -> Unit = {}) {
     val controller = container.listenTogether
     val state by controller.state.collectAsStateWithLifecycle()
     val account by container.neteaseSessions.state.collectAsStateWithLifecycle()
@@ -110,9 +110,7 @@ internal data class NeteaseListenTogetherActions(
     LaunchedEffect(archive.page, archive.reportRoomId, fate.partnerUid) { shareJob?.cancel() }
     LaunchedEffect(state.endedRoom?.roomId, state.endedOwnerUid, account.revision) {
         state.endedRoom?.takeIf { state.endedOwnerUid == account.profile?.uid }?.let { ended ->
-            // Leaving another room to accept a link should keep the invitation form visible.
-            if (initialInvitation == null || ListenTogetherInvitation.parse(initialInvitation)?.roomId == ended.roomId)
-                archiveController.report(ended.roomId, ended)
+            archiveController.report(ended.roomId, ended)
             controller.dismissEndedRoom()
         }
     }
@@ -212,7 +210,7 @@ internal data class NeteaseListenTogetherActions(
                         } }),
                     onBack = onBack, onSearch = onSearch, onPlayer = onPlayer, onBinding = onBinding,
                     currentMusicRoomActive = cmRoom.detail != null, onDialogActive = { mainDialogActive = it },
-                    onHistory = { archiveController.history() }, initialInvitation = initialInvitation)
+                    onHistory = { archiveController.history() })
             }
         }
     }
@@ -222,14 +220,13 @@ internal data class NeteaseListenTogetherActions(
     account: NeteaseAccountState, playback: PlayerState, actions: NeteaseListenTogetherActions,
     onBack: () -> Unit, onSearch: () -> Unit, onPlayer: () -> Unit,
     onBinding: (() -> Unit)? = null, currentMusicRoomActive: Boolean = false,
-    onDialogActive: (Boolean) -> Unit = {}, onHistory: (() -> Unit)? = null, initialInvitation: String? = null) {
+    onDialogActive: (Boolean) -> Unit = {}, onHistory: (() -> Unit)? = null) {
     val colors = MiuixTheme.colorScheme
     val ready = account.loggedIn && !account.stale && (account.profile?.uid ?: 0) > 0
     val canStart = ready && !state.busy && !currentMusicRoomActive
     val showAccountCard = !ready
     val accountSummary = when { account.stale -> "本机网易云登录已过期"; ready -> "已登录 · ${account.profile?.nickname?.ifBlank { "网易云用户" }}"; else -> "尚未登录本机网易云账号" }
-    var invite by rememberSaveable(account.revision, initialInvitation) { mutableStateOf(initialInvitation.orEmpty()) }
-    val requestedRoomId = remember(initialInvitation) { initialInvitation?.let(ListenTogetherInvitation::parse)?.roomId }
+    var invite by rememberSaveable(account.revision) { mutableStateOf("") }
     var inputError by remember(account.revision) { mutableStateOf<String?>(null) }
     var clipboardMessage by remember { mutableStateOf<String?>(null) }
     var leaveConfirmation by remember { mutableStateOf(false) }
@@ -241,11 +238,8 @@ internal data class NeteaseListenTogetherActions(
     DisposableEffect(Unit) { onDispose { onDialogActive(false) } }
     LaunchedEffect(state.room?.roomId, account.revision) { clipboardMessage = null }
     LaunchedEffect(state.busy) { if (state.busy) focus.clearFocus() }
-    LaunchedEffect(state.active, state.room?.roomId) {
-        if (state.active) {
-            if (requestedRoomId == null || requestedRoomId == state.room?.roomId) invite = ""
-            inputError = null
-        } else leaveConfirmation = false
+    LaunchedEffect(state.active) {
+        if (state.active) { invite = ""; inputError = null } else leaveConfirmation = false
     }
     fun phase(value: NeteaseListenTogetherState) = when {
         value.active -> "active:${value.room?.roomId}"
@@ -284,7 +278,7 @@ internal data class NeteaseListenTogetherActions(
                 }
             } } }
             if (currentMusicRoomActive) item { SettingsGroup(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("正在使用 CurrentMusic 房间", fontWeight = FontWeight.SemiBold)
+                Text("正在使用 Prom 房间", fontWeight = FontWeight.SemiBold)
                 Text("请先退出当前房间，再开启网易云双人一起听。", fontSize = 13.sp, color = colors.onSurfaceVariantSummary)
                 MusicTextAction("返回房间", onBack)
             } } }
@@ -296,15 +290,6 @@ internal data class NeteaseListenTogetherActions(
                 }
             } } }
             if (state.active) {
-                if (requestedRoomId != null && requestedRoomId != state.room?.roomId && invite.isNotBlank()) item {
-                    SettingsGroup(Modifier.fillMaxWidth().testTag("netease_listen_pending_invitation")) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("收到一起听邀请", fontWeight = FontWeight.SemiBold)
-                            Text("请先退出当前会话，再确认加入邀请中的会话。邀请链接已保留。",
-                                fontSize = 13.sp, color = colors.onSurfaceVariantSummary)
-                        }
-                    }
-                }
                 item { SettingsGroup(Modifier.fillMaxWidth().testTag("netease_listen_session")) { Column(Modifier.padding(20.dp)) {
                     val participants = state.room?.participants.orEmpty()
                     val pair = ListenTogetherPair(participants.map { ListenTogetherParticipant(it.userId, it.nickname, it.avatarUrl) })
@@ -411,7 +396,7 @@ internal data class NeteaseListenTogetherActions(
                         }, Modifier.testTag("netease_listen_join"), enabled = canStart && invite.isNotBlank())
                     }
                     if (state.operation == ListenTogetherOperation.JOIN) ListenLoadingLabel("正在连接好友的会话…", Modifier.testTag("netease_listen_join_loading"))
-                    Text("请使用网易云音乐的邀请链接；CurrentMusic 六位房间号请返回房间页加入。", fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
+                    Text("请使用网易云音乐的邀请链接；Prom 六位房间号请返回房间页加入。", fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
                 } } }
                 if (ready && onHistory != null) item {
                     SettingsGroup { MusicDestinationRow("一起听记录", onHistory, summary = "历史、排行与缘分报告") }

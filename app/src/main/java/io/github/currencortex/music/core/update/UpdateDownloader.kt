@@ -60,7 +60,7 @@ class UpdateDownloader(client: OkHttpClient, private val directory: File,
                     remoteCheck(url.scheme == "https" && url.username.isBlank() && url.password.isBlank(), "下载源必须使用 HTTPS")
                     val request = Request.Builder().url(url)
                         .header("Accept", "application/vnd.android.package-archive, application/octet-stream")
-                        .header("User-Agent", "CurrentMusic updater")
+                        .header("User-Agent", "Prom updater")
                     val call = (if (source == UpdateSource.CURRENTMUSIC) privateMirrorHttp else http).newCall(request.build())
                     val cancel = currentCoroutineContext().job.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { if (it != null) call.cancel() }
                     try {

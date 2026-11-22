@@ -11,12 +11,12 @@ import kotlinx.coroutines.flow.asStateFlow
 /** Technical audio fields only: no media URI, track title, USB address, PCM samples or account data. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal object CurrentMusicAudioDiagnostics {
-    const val TAG = "CurrentMusicAudio"
+    const val TAG = "PromAudio"
     private val lines = ArrayDeque<String>()
     private var size = 0
     private val mutable = MutableStateFlow("")
     val text = mutable.asStateFlow()
-    private fun header() = "CurrentMusicAudio · Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}"
+    private fun header() = "PromAudio · Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}"
     @Synchronized fun latestAttempt(): String = AudioDiagnosticExcerpt.latest(header(), lines.toList())
     @Synchronized fun fullSnapshot(): String = (listOf(header()) + lines).joinToString("\n")
     @Synchronized fun record(message: String) {

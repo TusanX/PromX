@@ -73,7 +73,7 @@ internal const val SIGNATURE_DURATION_MS = 2100L
         value = withContext(Dispatchers.Default) {
             try {
                 val (latin, chinese) = SignatureGlyphs.load(context.assets, name)
-                SignatureLaunchRenderer(name, latin, chinese, context.resources.getFont(R.font.lxgw_wenkai_regular))
+                SignatureLaunchRenderer(name, latin, chinese, android.graphics.Typeface.DEFAULT_BOLD)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -85,7 +85,7 @@ internal const val SIGNATURE_DURATION_MS = 2100L
     val prepared by rememberUpdatedState(onPrepared)
     LaunchedEffect(renderer) { if (renderer != null) prepared() }
     Canvas(modifier.fillMaxSize().testTag("signature_launch_frame")
-        .semantics { contentDescription = "CurrentMusic · $name" }) {
+        .semantics { contentDescription = "Prom · $name" }) {
         drawRect(Color(0xFF05070C))
         renderer?.draw(drawContext.canvas.nativeCanvas, size.width, size.height, time())
     }

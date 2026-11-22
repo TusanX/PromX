@@ -23,6 +23,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.MiuixIndication
 
 val LocalDarkTheme = staticCompositionLocalOf { false }
+/** 品牌主色（跟随外观设置），供不继承 MiuixTheme 的浮层（对话框等）使用 */
+val LocalBrandPrimary = staticCompositionLocalOf { Color(0xFF5877FF) }
 private val clearClickIndication = MiuixIndication(color = Color.Transparent)
 @Composable fun isInDarkTheme() = LocalDarkTheme.current
 
@@ -65,7 +67,8 @@ fun LeiTheme(settings: AppearanceSettings, darkSystemBars: Boolean? = null, dark
     val scaled = remember(density.density, density.fontScale, settings.uiScale, settings.customTextScale, settings.textScale) {
         Density(density.density * settings.uiScale, if (settings.customTextScale) settings.textScale else density.fontScale)
     }
-    CompositionLocalProvider(LocalDarkTheme provides dark, LocalDensity provides scaled, LocalCustomFont provides font, LocalCustomTypeface provides typeface,
+    CompositionLocalProvider(LocalDarkTheme provides dark, LocalBrandPrimary provides colors.primary,
+        LocalDensity provides scaled, LocalCustomFont provides font, LocalCustomTypeface provides typeface,
         LocalLiquidGlassEnabled provides (settings.liquidGlass && Build.VERSION.SDK_INT >= 33),
         LocalGlassBlurEnabled provides settings.blur) {
         MiuixTheme(colors = colors, textStyles = fontStyles) {
@@ -76,3 +79,5 @@ fun LeiTheme(settings: AppearanceSettings, darkSystemBars: Boolean? = null, dark
         }
     }
 }
+
+

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   apply:
-    if: github.repository == 'bileizhen/CurrentMusicX'
+    if: github.repository == 'TusanX/PromX'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,7 +23,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           package-manager-cache: false
@@ -48,6 +48,6 @@ jobs:
               await github.rest.issues.updateLabel({...context.repo,name:item.name,color:item.after});
               core.info(`Label ${item.name}: ${item.before} -> ${item.after}`);
             }
-            await core.summary.addHeading('CurrentMusicX · 标签配色已同步')
+            await core.summary.addHeading('PromX · 标签配色已同步')
               .addRaw(`已创建 ${missing.length} 个处理状态标签，更新 ${changes.length} 个已有标签的颜色。`)
               .write();

@@ -21,8 +21,7 @@ internal object DesktopLyricsHosts {
                 }, togglePlayback = { container.playerController.toggle() }, appearance = container.settings.state,
                 appForeground = container.appForeground, effectNotices = container.islandNotices,
                 installUpdate = { io.github.currencortex.music.core.update.UpdateInstallAction.open(app) },
-                pageHidden = container.desktopIslandPageHidden, musicSettings = container.musicSettings.state,
-                audioLevel = container.dockAudioLevel))
+                pageHidden = container.desktopIslandPageHidden, musicSettings = container.musicSettings.state))
         }
         entry.leases++
         var released = false

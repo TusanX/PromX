@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.currencortex.music.AppContainer
 import io.github.currencortex.music.core.storage.StorageUsage
-import io.github.currencortex.music.data.settings.AudioCacheLimit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -15,7 +14,6 @@ class StorageViewModel(private val container: AppContainer) : ViewModel() {
     val state = MutableStateFlow(StorageState())
     val audioBytes = container.audioCache.bytes
     val audioTracks = container.audioCache.entries
-    val cacheLimit = container.storageSettings.state
 
     fun refresh() = viewModelScope.launch {
         val usage = container.storage.measure()
@@ -25,11 +23,6 @@ class StorageViewModel(private val container: AppContainer) : ViewModel() {
     fun clearData() = action("已清理数据缓存") { container.storage.clearDataCache() }
 
     fun clearAudio() = action("已清理音乐缓存") { container.storage.clearAudioCache() }
-
-    fun setCacheLimit(value: AudioCacheLimit) = action("缓存上限已设为 ${value.label}") {
-        container.storageSettings.set(value)
-        container.audioCache.setMaxBytes(value.effectiveBytes)
-    }
 
     private fun action(done: String, block: suspend () -> Unit) = viewModelScope.launch {
         if (state.value.busy) return@launch

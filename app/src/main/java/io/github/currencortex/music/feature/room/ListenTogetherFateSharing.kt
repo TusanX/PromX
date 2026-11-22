@@ -79,8 +79,8 @@ internal object ListenTogetherFateSharing {
         return Intent(Intent.ACTION_SEND).apply {
             type = "image/png"
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_TITLE, "缘分报告 · CurrentMusicX")
-            putExtra(Intent.EXTRA_TEXT, "一起听的音乐时光，由 CurrentMusicX 分享。\n网易云官方入口（需登录及访问权限）：\n${report.officialUrl()}")
+            putExtra(Intent.EXTRA_TITLE, "缘分报告 · PromX")
+            putExtra(Intent.EXTRA_TEXT, "一起听的音乐时光，由 PromX 分享。\n网易云官方入口（需登录及访问权限）：\n${report.officialUrl()}")
             clipData = ClipData.newUri(context.contentResolver, "一起听缘分报告", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
@@ -129,7 +129,7 @@ internal object ListenTogetherFateSharing {
                 text(value, x, top, width, targetSize, color, bold = true)
             }
             fun card(bounds: RectF) { paint.color = Color.WHITE; canvas.drawRoundRect(bounds, 36f, 36f, paint) }
-            text("CurrentMusicX", 72f, 62f, 936, 38f, primary, bold = true)
+            text("PromX", 72f, 62f, 936, 38f, primary, bold = true)
             text("和 TA 的缘分报告", 72f, 145f, 936, 56f, bold = true)
             text("那些一起听过的歌，记录着彼此的陪伴。", 76f, 225f, 928, 25f, muted)
 
@@ -162,7 +162,7 @@ internal object ListenTogetherFateSharing {
 
             text("音乐，让陪伴有迹可循。", 74f, 1530f, 570, 32f, bold = true)
             text("数据来自网易云一起听\n网易云官方入口\n需登录及访问权限", 76f, 1590f, 570, 24f, muted, lines = 3)
-            text("由 CurrentMusicX 生成并分享", 76f, 1725f, 570, 21f, muted)
+            text("由 PromX 生成并分享", 76f, 1725f, 570, 21f, muted)
             val qr = qr(report.officialUrl())
             try {
                 paint.color = Color.WHITE

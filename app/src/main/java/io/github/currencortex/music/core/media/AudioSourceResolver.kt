@@ -2,39 +2,22 @@ package io.github.currencortex.music.core.media
 
 import io.github.currencortex.music.core.network.*
 import io.github.currencortex.music.data.song.AudioSource
-import io.github.currencortex.music.data.song.SERVER_AUDIO_SOURCE_IDENTITY_PREFIX
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 
 data class AudioRequest(val songId: Long, val quality: AudioQuality, val accountId: Long, val session: RequestSession,
-    val providerIdentity: String = "netease", val song: io.github.currencortex.music.data.song.Song? = null,
-    val refresh: Boolean = false, val supportsDolby: Boolean = false) {
-    val key get() = AudioCache.key(session.server, accountId, songId, quality, providerIdentity, supportsDolby)
-
-    private val dolbyAuto get() = quality == AudioQuality.AUTO &&
-        (providerIdentity == "netease" || providerIdentity.startsWith(SERVER_AUDIO_SOURCE_IDENTITY_PREFIX))
-
-    internal fun accepts(source: AudioSource): Boolean = !dolbyAuto || supportsDolby || source.level != AudioQuality.DOLBY.value
-
-    internal fun offlineAudio(cached: (AudioRequest) -> ResolvedAudio?): Pair<AudioRequest, ResolvedAudio>? {
-        cached(this)?.takeIf { accepts(it.source) }?.let { return this to it }
-        if (!dolbyAuto) return null
-        val alternate = copy(supportsDolby = !supportsDolby)
-        return cached(alternate)?.takeIf { accepts(it.source) }?.let { alternate to it }
-    }
-
-    internal fun selectedDolby(source: AudioSource): Boolean =
-        quality in setOf(AudioQuality.AUTO, AudioQuality.DOLBY) && supportsDolby &&
-            source.level == AudioQuality.DOLBY.value
+    val providerIdentity: String = "currentmusic", val song: io.github.currencortex.music.data.song.Song? = null,
+    val refresh: Boolean = false) {
+    val key get() = AudioCache.key(session.server, accountId, songId, quality, providerIdentity)
 }
 data class ResolvedAudio(val source: AudioSource, val key: String, val refreshAfterMs: Long = 25_000)
 
 /** Short-lived URL reuse for prefetched tracks; persisted bytes have a separate lifetime. */
 class AudioSourceResolver(private val cache: AudioCache, private val currentSession: () -> RequestSession,
     private val now: () -> Long = System::nanoTime,
-    private val currentProvider: () -> String = { "netease" },
+    private val currentProvider: () -> String = { "currentmusic" },
     private val validateRequest: (AudioRequest) -> Boolean? = { null },
     private val loadTrack: (suspend (AudioRequest) -> AudioSource)? = null,
     private val load: suspend (Long, AudioQuality, RequestSession) -> AudioSource) {
@@ -66,28 +49,13 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
         val advanceMs = minOf(30_000, entry.source.validForSeconds.coerceIn(1, 600) * 200)
         return ResolvedAudio(entry.source, entry.cacheKey, (remainingMs - advanceMs).coerceAtLeast(250))
     }
-    /** Keep a source selected outside [resolve], such as an LX fallback, on the normal cache path. */
-    suspend fun register(request: AudioRequest, source: AudioSource): ResolvedAudio = withContext(Dispatchers.IO) {
-        checkRequest(request)
-        val started = now()
-        val sourceKey = sourceCacheKey(request.key, source)
-        runCatching {
-            cache.rememberSource(sourceKey, source)
-            cache.rememberSelection(request.key, sourceKey)
-        }
-        store(request, source, sourceKey, started)
-    }
-    private fun store(request: AudioRequest, source: AudioSource, sourceKey: String, started: Long): ResolvedAudio {
-        // Bound reuse, reserve expiry headroom, and include the time spent resolving.
-        // A memo hit never extends the original URL's lifetime.
-        val seconds = source.validForSeconds.coerceIn(1, 600)
-        val lifetime = seconds * 1_000_000_000L
-        val entry = Entry(request, source, started + lifetime - minOf(lifetime / 10, 30_000_000_000L), sourceKey)
-        memo[request.key] = entry
-        if (memo.size > 24) memo.entries.minByOrNull { it.value.until }?.let { memo.remove(it.key, it.value) }
-        return result(entry)
-    }
     suspend fun resolve(request: AudioRequest, refresh: Boolean = false): ResolvedAudio = withContext(Dispatchers.IO) {
+        // 本地缓存文件优先：不管是哪个来源，只要给了 file:// 就直接读本地，避免走网络
+        request.song?.takeIf { it.localUri.startsWith("file://") }?.let { song ->
+            val uri = android.net.Uri.parse(song.localUri)
+            runCatching { cache.validateLocalUri(uri) }
+            return@withContext ResolvedAudio(AudioSource(uri.toString(), "cached", 0, 0), "", Long.MAX_VALUE)
+        }
         request.song?.takeIf { it.musicSource == io.github.currencortex.music.data.song.MusicSource.LOCAL }?.let { song ->
             val uri = android.net.Uri.parse(song.localUri)
             cache.validateLocalUri(uri)
@@ -99,7 +67,7 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
             denied[key]?.takeIf { it.request == request }?.let { throw it.error }
             // Complete, account/provider/quality-scoped audio does not need a CDN URL.
             // Partial cache must still resolve a live URL to read the missing bytes.
-            cache.completeSource(key)?.takeIf(request::accepts)?.takeUnless { it.matched || cache.matchedSourceKey(key) != null }?.let {
+            cache.completeSource(key)?.takeUnless { it.matched || cache.matchedSourceKey(key) != null }?.let {
                 checkRequest(request)
                 return@withContext ResolvedAudio(it, key, refreshAfterMs = Long.MAX_VALUE)
             }
@@ -124,20 +92,9 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
                     throw e
                 }
                 denied[key]?.takeIf { it.request == request }?.let { throw it.error }
-                val (cachedRequest, cachedAudio) = request.offlineAudio { candidate ->
-                    val candidateKey = if (candidate == request) key else candidate.key
-                    if (denied[candidateKey]?.request == candidate) return@offlineAudio null
-                    val cachedKey = cache.matchedSourceKey(candidateKey) ?: candidateKey
-                    cache.completeSource(cachedKey)?.takeUnless { cachedKey == candidateKey && it.matched }
-                        ?.let { ResolvedAudio(it, cachedKey) }
-                } ?: throw e
-                if (cachedRequest != request) {
-                    checkRequest(request)
-                    // A later online lookup should still be able to select the requested preference.
-                    return@withLock cachedAudio.copy(refreshAfterMs = Long.MAX_VALUE)
-                }
-                fallbackKey = cachedAudio.key
-                cachedAudio.source
+                val cachedKey = cache.matchedSourceKey(key) ?: key
+                (cache.completeSource(cachedKey)?.takeUnless { cachedKey == key && it.matched } ?: throw e)
+                    .also { fallbackKey = cachedKey }
             }
             checkRequest(request)
             denied.remove(key)
@@ -147,11 +104,18 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
                 cache.rememberSource(sourceKey, source)
                 cache.rememberSelection(key, sourceKey)
             }
-            store(request, source, sourceKey, started)
+            // Bound reuse, reserve expiry headroom, and include the time spent resolving.
+            // A memo hit never extends the original URL's lifetime.
+            val seconds = source.validForSeconds.coerceIn(1, 600)
+            val lifetime = seconds * 1_000_000_000L
+            val entry = Entry(request, source, started + lifetime - minOf(lifetime / 10, 30_000_000_000L), sourceKey)
+            memo[key] = entry
+            if (memo.size > 24) memo.entries.minByOrNull { it.value.until }?.let { memo.remove(it.key, it.value) }
+            result(entry)
         }
     }
 }
 
-/** Resolved candidates never share byte ranges with a different recording or plugin URL. */
+/** Matched files never share byte ranges with the official file or a different candidate. */
 internal fun sourceCacheKey(requestKey: String, source: AudioSource): String =
-    if (source.matched || source.source.startsWith("lx:")) "$requestKey:match:${source.cacheIdentity}" else requestKey
+    if (source.matched) "$requestKey:match:${source.cacheIdentity}" else requestKey

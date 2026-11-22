@@ -24,7 +24,7 @@ internal class ListenTogetherInvitationResolver(client: OkHttpClient = OkHttpCli
         repeat(5) {
             check(url.scheme == shortOrigin.scheme && url.host == shortOrigin.host && url.port == shortOrigin.port &&
                 url.username.isEmpty() && url.password.isEmpty()) { "短链接跳转地址不受支持" }
-            val request = Request.Builder().url(url).header("User-Agent", "CurrentMusicX/ListenTogether").build()
+            val request = Request.Builder().url(url).header("User-Agent", "PromX/ListenTogether").build()
             val response = suspendCancellableCoroutine<Response> { continuation ->
                 val call = http.newCall(request)
                 continuation.invokeOnCancellation { call.cancel() }

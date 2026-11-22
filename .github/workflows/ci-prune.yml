@@ -20,7 +20,7 @@ concurrency:
 jobs:
   prune:
     if: >-
-      github.repository == 'bileizhen/CurrentMusicX' && github.ref == 'refs/heads/main' &&
+      github.repository == 'TusanX/PromX' && github.ref == 'refs/heads/main' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -34,7 +34,7 @@ jobs:
           ref: main
           sparse-checkout: .github/scripts
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           package-manager-cache: false

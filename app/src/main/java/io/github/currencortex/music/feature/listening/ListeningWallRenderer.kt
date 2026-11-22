@@ -203,7 +203,7 @@ internal class ListeningWallRenderSession(
             if (!scatter) {
                 val top = if (template.layout == ListeningExportLayout.GRID) 1968f else 1897f
                 if (info.isCloud) asset(Media + "screensaver_logo_black.6c5a3dbd.png", 787f, top, 338f, 42f)
-                else text(canvas, "CurrentMusicX", 1080f, top + 35, 31f, Color.DKGRAY, align = Paint.Align.RIGHT)
+                else text(canvas, "PromX", 1080f, top + 35, 31f, Color.DKGRAY, align = Paint.Align.RIGHT)
             }
         } else {
             val ink = Color.parseColor(if (template.dark) "#E4E4E4" else "#232323")
@@ -228,7 +228,7 @@ internal class ListeningWallRenderSession(
                 (ink and 0x00FFFFFF) or 0xCC000000.toInt(), Paint.Align.RIGHT, numberFont)
             if (info.isCloud) {
                 if (!scatter || !preview) asset(Media + if (template.dark) "poster_logo_white.b6009d0e.png" else "poster_logo_black.2700c799.png", 810f, 81f, 255f, 43.53f)
-            } else text(canvas, "CurrentMusicX", 1065f, 119f, 34f, ink, Paint.Align.RIGHT)
+            } else text(canvas, "PromX", 1065f, 119f, 34f, ink, Paint.Align.RIGHT)
             if (scatter && info.isCloud) asset(assetList[1], 383.8f, if (info.superVip) 193.8f else 234f, 741.2f, 248.7f)
             info.qrUrl?.takeIf { it.startsWith("https://") }?.let { link ->
                 val matrix = QRCodeWriter().encode(link, BarcodeFormat.QR_CODE, 129, 129, mapOf(EncodeHintType.MARGIN to 0))
@@ -269,7 +269,7 @@ internal suspend fun saveListeningExportToGallery(context: Context, file: File, 
     val values = ContentValues().apply {
         put(MediaStore.Images.Media.DISPLAY_NAME, name)
         put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/CurrentMusicX")
+        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PromX")
         put(MediaStore.Images.Media.IS_PENDING, 1)
     }
     val uri = checkNotNull(resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values))

@@ -142,7 +142,24 @@ class PlayerController(private val context: Context, override val queue: Playbac
             old.positionMs != next.positionMs || old.playing != next.playing || old.loading != next.loading ||
             old.playbackSpeed != next.playbackSpeed || old.anchorRealtimeMs == 0L) SystemClock.elapsedRealtime() else old.anchorRealtimeMs)
     }
+    /** 视频模式期间为 true：音频的加载与播放请求一律不执行（否则会从头播一段） */
+    @Volatile var videoHold: Boolean = false
+        private set
+
+    fun holdForVideo(hold: Boolean) {
+        videoHold = hold
+        if (hold) {
+            state.value = state.value.copy(playing = false, playRequested = false, loading = false, resolving = false)
+            hardMute(true)
+        } else {
+            hardMute(false)
+        }
+    }
+
     fun load(play: Boolean = true, position: Long = queue.state.value.positionMs, refreshSource: Boolean = false) = scope.launch(Dispatchers.Main.immediate) {
+        // 挂起只应发生在视频模式进行中；一旦不是，必须放行，否则之后什么都播不了
+        if (videoHold && beforeVideo != null) return@launch
+        if (videoHold) holdForVideo(false)
         val epoch = generation
         if (queue.state.value.current == null) return@launch
         val action = ++transportGeneration
@@ -155,13 +172,14 @@ class PlayerController(private val context: Context, override val queue: Playbac
             connected.sendCustomCommand(SessionCommand(MusicService.LOAD, Bundle.EMPTY), Bundle().apply {
                 putBoolean("play", play); putLong("position", position); putBoolean("refreshSource", refreshSource)
             }).await()
-        } catch (e: CancellationException) { throw e } catch (_: Exception) {
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
             if (action == transportGeneration) state.value = state.value.copy(playRequested = false, loading = false, resolving = false, error = "无法连接播放器")
         } finally { if (action == transportGeneration) commandIntent = null }
     }
     fun playList(songs: List<Song>, index: Int) { if (!localOnly()) return; beforeVideo = null; queue.replace(songs, index); load() }
     fun playSong(song: Song) { if (!localOnly()) return; beforeVideo = null; queue.playSong(song); load() }
     fun toggle() = scope.launch(Dispatchers.Main.immediate) {
+        if (videoHold) return@launch
         if (!transportAllowed()) return@launch
         external?.let { it.play(!state.value.playing); return@launch }
         if (queue.state.value.current == null) return@launch
@@ -194,6 +212,7 @@ class PlayerController(private val context: Context, override val queue: Playbac
         return false
     }
     fun pause() {
+        android.util.Log.d("PromXAudio", "pause() requested controller=${if (controller == null) "null" else "ok"} external=${if (external == null) "null" else "ok"} canControl=${state.value.canControlPlayback}")
         if (!transportAllowed()) return
         external?.let { it.play(false); return }
         ++transportGeneration; commandIntent = false
@@ -201,31 +220,48 @@ class PlayerController(private val context: Context, override val queue: Playbac
             positionMs = controller?.currentPosition?.coerceAtLeast(0) ?: state.value.positionMs, anchorRealtimeMs = SystemClock.elapsedRealtime())
         controller?.let { it.pause(); commandIntent = null }
     }
-    internal suspend fun discardLoadedLocalAudio() {
-        val playback = state.value
-        val snapshot = queue.state.value
-        if (playback.mode != PlayerMode.LOCAL || snapshot.current == null) return
-        val position = if (playback.song == snapshot.current) playback.positionMs else snapshot.positionMs
-        val action = ++transportGeneration
-        commandIntent = false
-        queue.state.value = snapshot.copy(positionMs = position)
-        state.value = playback.copy(playing = false, playRequested = false, loading = false, resolving = false,
-            audioInfo = null, bufferedPositionMs = 0, audioFullyCached = false, positionMs = position,
-            anchorRealtimeMs = SystemClock.elapsedRealtime(), error = null)
-        try {
-            controller?.sendCustomCommand(SessionCommand(MusicService.QUIESCE, Bundle.EMPTY), Bundle.EMPTY)?.await()
-        } finally {
-            if (action == transportGeneration) commandIntent = null
-        }
-    }
     fun next(play: Boolean = true) { if (!transportAllowed()) return; external?.let { it.next(); return }; if (queue.next()) load(play) else if (queue.state.value.radioSession != null) onRadioBoundary?.invoke() }
     fun previous(play: Boolean = true) { if (!transportAllowed()) return; external?.let { it.previous(); return }; queue.previous(); load(play) }
+    /** 视频模式需要把音频压成静音（暂停可能被加载流程覆盖），这里给一个显式音量入口 */
+    /**
+     * 视频模式专用：先连上 MediaController 再强制静音/暂停。
+     * 之前的 pause/setVolume 在 controller 还没连上时等于空操作（播放实际在 MusicService 里）。
+     */
+    fun hardMute(mute: Boolean) {
+        scope.launch(Dispatchers.Main.immediate) {
+            runCatching {
+                val c = connect()
+                if (mute) {
+                    commandIntent = false
+                    c.playWhenReady = false
+                    c.volume = 0f
+                    state.value = state.value.copy(playing = false, playRequested = false, loading = false)
+                    android.util.Log.d("PromXAudio", "hardMute on -> volume=${c.volume} playWhenReady=${c.playWhenReady}")
+                } else {
+                    c.volume = 1f
+                    android.util.Log.d("PromXAudio", "hardMute off -> volume=${c.volume}")
+                }
+            }.onFailure { android.util.Log.d("PromXAudio", "hardMute failed ${it.javaClass.simpleName}") }
+        }
+    }
+
+    fun setVolume(volume: Float) {
+        val v = volume.coerceIn(0f, 1f)
+        external?.let { if (v <= 0.01f) it.play(false) }
+        controller?.volume = v
+        android.util.Log.d("PromXAudio", "setVolume=$v controller=${if (controller == null) "null" else "ok"} external=${if (external == null) "null" else "ok"} playing=${state.value.playing} canControl=${state.value.canControlPlayback}")
+    }
+
+    /** 视频模式的倍速（作用于同一路播放器） */
+    fun setSpeed(speed: Float) {
+        controller?.setPlaybackSpeed(speed.coerceIn(.25f, 3f))
+    }
+
     fun seek(position: Long) { if (!transportAllowed()) return; external?.let { it.seek(position.coerceAtLeast(0)); return }; val target = position.coerceAtLeast(0)
         state.value = state.value.copy(positionMs = target, anchorRealtimeMs = SystemClock.elapsedRealtime(), timelineRevision = state.value.timelineRevision + 1)
         controller?.seekTo(target)
     }
     fun add(song: Song, next: Boolean = false) { if (state.value.mode == PlayerMode.ROOM) { external?.enqueue(song, next); return }; queue.add(song, next) }
-    fun move(from: Int, to: Int, expectedSongs: List<Song>) { if (localOnly()) queue.move(from, to, expectedSongs) }
     fun remove(index: Int) { if (!localOnly()) return; if (queue.remove(index)) { if (queue.state.value.current == null) clear() else load(state.value.playing) } }
     fun clear() { if (!localOnly()) return; ++transportGeneration; commandIntent = null; beforeVideo = null; queue.clear(); controller?.stop(); controller?.clearMediaItems(); state.value = PlayerState() }
     fun select(index: Int) { if (!localOnly()) return; queue.select(index); load() }

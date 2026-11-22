@@ -8,7 +8,7 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonPrimitive
 
-/** CurrentMusic's public square uses SQLite 0/1 flags; profiles use JSON booleans. */
+/** Prom's public square uses SQLite 0/1 flags; profiles use JSON booleans. */
 object ApiBooleanSerializer : KSerializer<Boolean> {
     override val descriptor = PrimitiveSerialDescriptor("ApiBoolean", PrimitiveKind.BOOLEAN)
     override fun deserialize(decoder: Decoder): Boolean = if (decoder is JsonDecoder) {

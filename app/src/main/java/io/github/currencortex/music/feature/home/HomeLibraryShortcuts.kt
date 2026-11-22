@@ -16,22 +16,27 @@ import io.github.currencortex.music.ui.component.*
 import io.github.currencortex.music.ui.component.nativeui.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable internal fun HomeLibraryShortcuts(navigate: (String) -> Unit, inRoom: Boolean,
-    likesRoute: String = "lib/likes", playlistsRoute: String = "lib/playlists",
-    fourthTitle: String? = null, fourthIcon: ImageVector = MusicIcons.Headphones,
-    fourthTag: String = "open_rooms", fourthRoute: String = "room/list") {
+    container: io.github.currencortex.music.AppContainer? = null) {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     Column(Modifier.fillMaxWidth().testTag("home_shortcuts")) {
         SettingsGroup {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
-            HomeShortcut("我喜欢", MusicIcons.Heart, "open_likes", { navigate(likesRoute) }, Modifier.weight(1f))
-            HomeShortcut("歌单", MusicIcons.List, "open_playlists", { navigate(playlistsRoute) }, Modifier.weight(1f))
+            HomeShortcut("我喜欢", MusicIcons.Heart, "open_likes", {
+                if (container == null) navigate("lib/likes") else scope.launch {
+                    navigate(io.github.currencortex.music.feature.library.likesRouteFor(container))
+                }
+            }, Modifier.weight(1f))
+            HomeShortcut("歌单", MusicIcons.List, "open_playlists", { navigate("lib/playlists") }, Modifier.weight(1f))
             HomeShortcut("听歌识曲", MusicIcons.Microphone, "open_recognition", { navigate("lib/recognition") }, Modifier.weight(1f))
-            HomeShortcut(fourthTitle ?: if (inRoom) "回到房间" else "一起听", fourthIcon, fourthTag,
-                { navigate(fourthRoute) }, Modifier.weight(1f))
+            HomeShortcut(if (inRoom) "回到房间" else "一起听", MusicIcons.Headphones, "open_rooms",
+                { navigate("room/list") }, Modifier.weight(1f))
         }
         }
     }

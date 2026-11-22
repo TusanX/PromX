@@ -28,7 +28,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     val automatic by vm.automaticServer.collectAsStateWithLifecycle()
     val checking by vm.serverProbeBusy.collectAsStateWithLifecycle()
     LaunchedEffect(vm) { vm.refreshServers() }
-    MusicChoiceDialog("CurrentMusic 服务器", onDismiss, footer = {
+    MusicChoiceDialog("Prom 服务器", onDismiss, footer = {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MusicDialogButton(if (checking) "检测中" else "重新检测", { vm.refreshServers() },
                 Modifier.weight(1f).testTag("server_probe_refresh"), enabled = !checking)

@@ -1,5 +1,7 @@
 package io.github.currencortex.music.ui.component
 
+import io.github.currencortex.music.ui.theme.LocalBrandPrimary
+
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.animateFloatAsState
@@ -45,9 +47,9 @@ internal val LocalMusicDialogBackdrop = staticCompositionLocalOf<LayerBackdrop?>
 internal val LocalMusicDialogEdgeToEdge = staticCompositionLocalOf { false }
 
 @Composable internal fun musicDialogColors() = if (isInDarkTheme())
-    darkColorScheme(primary = Color(0xFF6BA5FF), background = Color(0xFF292A2D),
+    darkColorScheme(primary = LocalBrandPrimary.current, background = Color(0xFF292A2D),
         surface = Color(0xFF37383C), onBackground = Color(0xFFF5F5F7))
-else lightColorScheme(primary = Color(0xFF3485FF), background = Color(0xFFF2F3F5),
+else lightColorScheme(primary = LocalBrandPrimary.current, background = Color(0xFFF2F3F5),
     surface = Color.White, onBackground = Color(0xFF17181B))
 
 @Composable internal fun musicDialogFallbackColor() = if (isInDarkTheme()) Color(0xF22C2D30) else Color(0xDDF2F3F5)

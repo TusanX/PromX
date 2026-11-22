@@ -1,7 +1,4 @@
 function eligible(pr) {
-  // Never update Dependabot branches with GITHUB_TOKEN: this causes GitHub to
-  // hold subsequent pull_request workflow runs for manual approval.
-  if (pr.user?.login === 'dependabot[bot]' && pr.user?.id === 49699333) return false;
   return pr.state === 'open' && pr.base.ref === 'main' && !pr.draft && pr.head?.repo && pr.head.sha &&
     !pr.labels.some(label => label.name === 'bot: skip');
 }
@@ -52,4 +49,4 @@ async function run({github, context, core}) {
   }
 }
 
-module.exports = {run, eligible};
+module.exports = {run};

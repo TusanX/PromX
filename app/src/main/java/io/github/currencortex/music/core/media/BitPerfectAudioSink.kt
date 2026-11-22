@@ -13,8 +13,7 @@ import io.github.currencortex.music.data.settings.AudioOutputSettings
 import java.nio.ByteBuffer
 
 /** Bypasses DefaultAudioSink's int16/float conversion. Only codec padding is removed;
- * every remaining PCM byte reaches AudioOutput unchanged, including 24/32-bit PCM.
- * USB Host applies its own volume in AudioOutput; strict Bit-perfect does not. */
+ * every remaining PCM byte reaches AudioOutput unchanged, including 24/32-bit PCM. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -> AudioOutputSettings,
     private val report: (String) -> Unit,
@@ -34,10 +33,7 @@ internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -
     private fun selected() = settings().mode.rawPcm
     private val label get() = if (settings().mode == AudioOutputMode.NETEASE_USB) "USB 独占（网易云）" else "Bit-perfect"
     private var active = false
-    private var usbVolume = false
     private var format = Format.Builder().build()
-    private var sourceFormat = Format.Builder().build()
-    private var channelAdapter: NeteaseUsbChannelProcessor? = null
     private var next: AudioSink.AudioSinkConfig? = null
     private var stream: BitPerfectStream? = null
     private var attributes = AudioAttributes.DEFAULT
@@ -64,28 +60,19 @@ internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -
     override fun configure(config: AudioSink.AudioSinkConfig) {
         if (active && stream != null) { next = config; return }
         active = selected()
-        usbVolume = active && settings().mode == AudioOutputMode.NETEASE_USB
         if (!active) { super.configure(config); return }
-        sourceFormat = config.format
-        format = sourceFormat
-        CurrentMusicAudioDiagnostics.format("decodedPcm.sink", sourceFormat)
+        format = config.format
+        CurrentMusicAudioDiagnostics.format("decodedPcm.sink", format)
         val mapping = config.outputChannelMapping
-        if (getFormatSupport(sourceFormat) == AudioSink.SINK_FORMAT_UNSUPPORTED || sourceFormat.sampleRate <= 0 || sourceFormat.channelCount <= 0 ||
-            (mapping != null && (mapping.length() != sourceFormat.channelCount || (0 until mapping.length()).any { mapping[it] != it }))) {
+        if (getFormatSupport(format) == AudioSink.SINK_FORMAT_UNSUPPORTED || format.sampleRate <= 0 || format.channelCount <= 0 ||
+            (mapping != null && (mapping.length() != format.channelCount || (0 until mapping.length()).any { mapping[it] != it }))) {
             val reason = "$label 已停止：不支持此 PCM 格式或声道重排"
             report(reason)
-            throw AudioSink.ConfigurationException(reason, sourceFormat)
+            throw AudioSink.ConfigurationException(reason, format)
         }
-        channelAdapter = if (settings().mode == AudioOutputMode.NETEASE_USB && sourceFormat.channelCount > 2) {
-            NeteaseUsbChannelProcessor { true }.also {
-                format = sourceFormat.buildUpon().setChannelCount(2).setChannelMask(Format.NO_VALUE).build()
-                it.configure(AudioProcessor.AudioFormat(sourceFormat))
-                it.flush(AudioProcessor.StreamMetadata(C.TIME_UNSET))
-            }
-        } else null
         frameSize = Util.getPcmFrameSize(format.pcmEncoding, format.channelCount)
-        trim.setTrimFrameCount(sourceFormat.encoderDelay, sourceFormat.encoderPadding)
-        trim.configure(AudioProcessor.AudioFormat(sourceFormat))
+        trim.setTrimFrameCount(format.encoderDelay, format.encoderPadding)
+        trim.configure(AudioProcessor.AudioFormat(format))
         clearPosition()
     }
     private fun clearPosition() {
@@ -95,8 +82,7 @@ internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -
     }
     private fun fail(error: Exception): Nothing {
         val message = "$label 已停止：${error.message ?: "输出条件已改变"}"
-        val cause = error.cause?.let { " cause=${it.javaClass.simpleName}:${it.message?.take(400)}" }.orEmpty()
-        CurrentMusicAudioDiagnostics.record("finalState=FAILED reason=${error.javaClass.simpleName} detail=${error.message?.take(600)}$cause")
+        CurrentMusicAudioDiagnostics.record("finalState=FAILED reason=${error.javaClass.simpleName} detail=${error.message?.take(600)}")
         report(message)
         throw AudioSink.InitializationException(message, 0, format, false, error)
     }
@@ -114,9 +100,9 @@ internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -
                 override fun onUnderrun() { listener?.onUnderrun(0, 0, 0) }
                 override fun onReleased() = Unit
             })
-            if (usbVolume) stream!!.output.setVolume(volume)
-            if (playing && (usbVolume || volume == 1f)) stream!!.output.play()
-            else if (!usbVolume && volume != 1f) report("$label 已暂停：静音或音频焦点衰减；请使用 DAC 调节音量")
+            // Never scale PCM. Ducking/mute pauses output instead of changing samples.
+            if (playing && volume == 1f) stream!!.output.play()
+            else if (volume != 1f) report("$label 已暂停：静音或音频焦点衰减；请使用 DAC 调节音量")
         } catch (error: Exception) { releaseRaw(); fail(error) }
     }
     private fun drain() {
@@ -146,17 +132,11 @@ internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -
         if (discontinuity) {
             start = presentationTimeUs - durationUs(); discontinuity = false; listener?.onPositionDiscontinuity()
         }
-        if (trim.isActive) { trim.queueInput(buffer); pending = adapt(trim.output) } else pending = adapt(buffer)
+        if (trim.isActive) { trim.queueInput(buffer); pending = trim.output } else pending = buffer
         drain()
         return !buffer.hasRemaining() && !pending.hasRemaining()
     }
     private fun durationUs() = if (frameSize == 0) 0L else written / frameSize * 1_000_000 / format.sampleRate
-    private fun adapt(buffer: ByteBuffer): ByteBuffer {
-        val adapter = channelAdapter ?: return buffer
-        if (!buffer.hasRemaining()) return AudioProcessor.EMPTY_BUFFER
-        adapter.queueInput(buffer)
-        return adapter.output
-    }
     override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
         if (!active) return super.getCurrentPositionUs(sourceEnded)
         if (start == C.TIME_UNSET) return AudioSink.CURRENT_POSITION_NOT_SET
@@ -170,11 +150,8 @@ internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -
         if (trim.isActive && !trimEnded) {
             // This is a real stream boundary, not a processor drain for speed changes.
             // Mark reconfiguration so TrimmingAudioProcessor discards codec end padding.
-            trim.configure(AudioProcessor.AudioFormat(sourceFormat))
-            trim.queueEndOfStream(); trimEnded = true; pending = adapt(trim.output); drain()
-        }
-        if (channelAdapter != null && !pending.hasRemaining()) {
-            channelAdapter!!.queueEndOfStream(); pending = channelAdapter!!.output; drain()
+            trim.configure(AudioProcessor.AudioFormat(format))
+            trim.queueEndOfStream(); trimEnded = true; pending = trim.output; drain()
         }
         if (pending.hasRemaining()) return
         ending = true
@@ -184,12 +161,11 @@ internal class BitPerfectAudioSink(normal: AudioSink, private val settings: () -
         pending.hasRemaining() || (stream != null && (stream!!.output.positionUs.coerceAtLeast(0) < durationUs()))
     override fun isEnded() = if (!active) super.isEnded() else ending && !hasPendingData()
     override fun handleDiscontinuity() { if (active) discontinuity = true else super.handleDiscontinuity() }
-    override fun play() { playing = true; if (active) { if (usbVolume || volume == 1f) stream?.output?.play() } else super.play() }
+    override fun play() { playing = true; if (active) { if (volume == 1f) stream?.output?.play() } else super.play() }
     override fun pause() { playing = false; if (active) stream?.output?.pause() else super.pause() }
     override fun setVolume(volume: Float) {
         this.volume = volume
         if (!active) { super.setVolume(volume); return }
-        if (usbVolume) { stream?.output?.setVolume(volume); return }
         if (volume != 1f) { stream?.output?.pause(); report("$label 已暂停：静音或音频焦点衰减；请使用 DAC 调节音量") }
         else if (playing) stream?.output?.play()
     }

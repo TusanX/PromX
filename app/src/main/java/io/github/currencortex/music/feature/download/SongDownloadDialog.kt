@@ -42,20 +42,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     val context = LocalContext.current
     val manager = container.songDownloads
     val directory by manager.directory.collectAsStateWithLifecycle()
-    val project by container.accountRepository.state.collectAsStateWithLifecycle()
-    val qqAccount by container.qqMusic.state.collectAsStateWithLifecycle()
-    val settings by container.musicSettings.state.collectAsStateWithLifecycle()
-    val audioProvider by container.audioSettings.state.collectAsStateWithLifecycle()
-    val owner = remember(song.id, song.musicSource, project.account?.id, settings.server, qqAccount.revision, audioProvider.identity) {
-        if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
-            container.qqMusic.selectOwner()
-            manager.ownerKey(song, project.account?.id ?: 0L, container.accountRepository.server,
-                container.qqAudioIdentity(), container.qqMusic.state.value.revision.toString())
-        } else ""
-    }
-    val info by remember(manager, song.id, song.musicSource, owner) { manager.observe(song, owner) }.collectAsStateWithLifecycle(null)
-    var selectedQuality by rememberSaveable(song.id, song.musicSource) { mutableStateOf<String?>(null) }
-    val quality = selectedQuality?.let(AudioQuality::from) ?: settings.downloadQualityFor(song.musicSource)
+    val info by remember(manager, song.id, song.musicSource) { manager.observe(song) }.collectAsStateWithLifecycle(null)
+    var quality by rememberSaveable(song.id) { mutableStateOf(container.musicSettings.state.value.quality.value) }
     var choosingQuality by rememberSaveable { mutableStateOf(false) }
     var afterFolder by rememberSaveable { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
@@ -64,23 +52,16 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     val saved = info?.state == WorkInfo.State.SUCCEEDED
     fun start() {
         try {
-            if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
-                container.qqMusic.selectOwner()
-                val account = container.qqMusic.state.value
-                if (!account.loggedIn) { context.showMusicError("请先登录 QQ 音乐"); return }
-                manager.start(song, quality, container.accountRepository.state.value.account?.id ?: 0L,
-                    container.accountRepository.server, container.qqAudioIdentity(),
-                    navidromeRevision = account.revision.toString())
-            } else if (song.emby != null) {
+            if (song.emby != null) {
                 val account = container.emby.state.value
                 if (!account.download) { context.showMusicError("此 Emby 账号不允许下载"); return }
-                manager.start(song, quality, 0, account.server, "emby:" + account.identity,
+                manager.start(song, AudioQuality.from(quality), 0, account.server, "emby:" + account.identity,
                     navidromeRevision = account.revision)
             } else if (song.navidrome != null) {
                 val account = container.navidrome.state.value
-                manager.start(song, quality, 0, account.server, "navidrome:" + account.identity,
+                manager.start(song, AudioQuality.from(quality), 0, account.server, "navidrome:" + account.identity,
                     navidromeRevision = account.revision)
-            } else manager.start(song, quality, container.accountRepository.state.value.account?.id ?: 0L,
+            } else manager.start(song, AudioQuality.from(quality), container.accountRepository.state.value.account?.id ?: 0L,
                 container.accountRepository.server, container.audioSettings.access().identity,
                 if (container.nativeNetease != null) container.neteaseSessions.state.value.profile?.uid ?: 0L else -1)
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -115,17 +96,17 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
         afterFolder = false
     }
     // Reuse the playback picker so both quality sheets stay visually identical.
-    if (choosingQuality) AudioQualitySheet(quality, { selectedQuality = it.value },
-        { choosingQuality = false }, enabled = !active, title = "下载音质", song = song, container = container)
+    if (choosingQuality) AudioQualitySheet(AudioQuality.from(quality), { quality = it.value },
+        { choosingQuality = false }, enabled = !active, title = "下载音质")
     else MusicDialog("下载歌曲", onDismiss) {
         Column(Modifier.testTag("song_download_dialog").heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(song.name, fontSize = 18.sp)
             Text(song.artists, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f))
-            if (song.privateLibrary) Text(song.originalQualityLabel) else MusicDestinationRow("下载音质", { choosingQuality = true }, summary = quality.label,
+            if (song.privateLibrary) Text(song.originalQualityLabel) else MusicDestinationRow("下载音质", { choosingQuality = true }, summary = AudioQuality.from(quality).label,
                 enabled = !active && !deleting, modifier = Modifier.testTag("song_download_quality"))
             val location = directory?.let { Uri.decode(it.lastPathSegment.orEmpty()).substringAfter(':') }
-                ?: if (Build.VERSION.SDK_INT >= 29) "Download/CurrentMusic" else "请选择文件夹"
+                ?: if (Build.VERSION.SDK_INT >= 29) "Download/Prom" else "请选择文件夹"
             MusicDestinationRow("保存位置", { afterFolder = false; folderLauncher.launch(directory) }, summary = location,
                 enabled = !active && !deleting, modifier = Modifier.testTag("song_download_directory"))
             Text("原格式保存，内嵌歌曲信息、封面和歌词；同时保存同名封面与 LRC。", fontSize = 12.sp,
@@ -162,7 +143,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             MusicDialogButton(when { active -> "取消下载"; info?.state == WorkInfo.State.FAILED -> "重试下载"
                 saved -> "打开歌曲"; else -> "开始下载" }, onClick = {
                 when {
-                    active -> manager.cancel(song, owner)
+                    active -> manager.cancel(song)
                     saved -> try {
                         context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(info?.outputData?.getString("uri")), "audio/*")
                             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))

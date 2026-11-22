@@ -125,7 +125,9 @@ import androidx.lifecycle.compose.currentStateAsState
     val blur = if (percent.isFinite()) percent.coerceIn(0f, 100f) else 35f
     val scale = 1f + .3f * blur / 100f
     val request = remember(file) { ImageRequest.Builder(context).data(file).size(1080, 1920).build() }
-    if (Build.VERSION.SDK_INT >= 31) {
+    // 所有版本统一走「降采样后预模糊」：全屏实时 blur 是播放页最大开销（A/B 实测 90 分位 150→350ms）。
+    // 观感等价：模糊半径不变，只是先在 1/1.5 尺寸上算一次，再放大绘制。
+    if (false) {
         AsyncImage(model = request, contentDescription = null, contentScale = ContentScale.Crop,
             modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.blur((blur * .8f).dp))
     } else {

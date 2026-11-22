@@ -35,10 +35,21 @@ class BindingViewModel(val container: AppContainer) : ViewModel() {
     private var qrGeneration = 0L
     private var qrTerminal = false
     private fun session() = RequestSession(container.accountRepository.server, container.accountRepository.token)
-    val canLoginNetease get() = container.accountRepository.state.value.account != null && !container.accountRepository.token.isNullOrBlank()
-    private fun requireCurrentMusicAccount() {
-        if (!canLoginNetease) throw ApiException(ErrorKind.CurrentMusicAccountRequired)
+
+    /** 原生网易云路由（不经过任何 Prom / CurrentMusic 服务） */
+    private suspend fun native(path: String, body: kotlinx.serialization.json.JsonObject =
+        kotlinx.serialization.json.buildJsonObject { },
+        query: Map<String, String> = emptyMap()): kotlinx.serialization.json.JsonObject {
+        val gw = container.nativeNetease ?: throw ApiException(ErrorKind.Server)
+        return gw.request("POST", path, query, body) as kotlinx.serialization.json.JsonObject
     }
+    private fun kotlinx.serialization.json.JsonElement.text(k: String, d: String = ""): String =
+        (this as? kotlinx.serialization.json.JsonObject)?.get(k)
+            ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: d
+    private fun kotlinx.serialization.json.JsonElement.int(k: String, d: Int = -1): Int =
+        text(k).toIntOrNull() ?: d
+    val canLoginNetease get() = true   // 原生网易云登录不依赖任何 Prom 账号
+    private fun requireCurrentMusicAccount() { /* 已移除账号依赖 */ }
     init {
         viewModelScope.launch {
             container.neteaseSessions.ready.await()
@@ -171,7 +182,10 @@ class BindingViewModel(val container: AppContainer) : ViewModel() {
             requireCurrentMusicAccount()
             // A gateway timeout does not prove that the SMS was not delivered.
             state.update { it.copy(codeUntil = SystemClock.elapsedRealtime() + 60_000, codeFailed = false) }
-            when (val result = appResult { container.bindingRepository.sendCode(phone, country, alternate, expected) }) {
+            when (val result = appResult { native("ncmbind/phone/code", kotlinx.serialization.json.buildJsonObject {
+                put("phone", kotlinx.serialization.json.JsonPrimitive(phone))
+                put("ctcode", kotlinx.serialization.json.JsonPrimitive(country))
+            }) }) {
                 is AppResult.Success -> "验证码已发送，请查看短信"
                 is AppResult.Failure -> {
                     if (expected == session()) state.update { it.copy(codeFailed = true) }
@@ -181,11 +195,15 @@ class BindingViewModel(val container: AppContainer) : ViewModel() {
         }
     }
     fun phone(phone: String, captcha: String, country: String) = action("手机验证码登录") { expected ->
-        requireCurrentMusicAccount()
-        container.bindingRepository.bindPhone(phone, captcha, country, expected)
-        if (expected != session()) throw ApiException(ErrorKind.Unauthorized)
-        state.update { it.copy(phoneBoundRevision = it.phoneBoundRevision + 1) }
-        afterBinding(expected)
+        // 原生网关：直接由设备向网易云登录，不经过 Prom 服务
+        native("ncmbind/phone/login", kotlinx.serialization.json.buildJsonObject {
+            put("phone", kotlinx.serialization.json.JsonPrimitive(phone))
+            put("captcha", kotlinx.serialization.json.JsonPrimitive(captcha))
+            put("ctcode", kotlinx.serialization.json.JsonPrimitive(country))
+        })
+        qrTerminal = true
+        action("音乐库更新") { afterBinding(expected) }
+        "网易云登录成功"
     }
     suspend fun qrSession() {
         if (!canLoginNetease) { clearQr(); return }
@@ -197,7 +215,7 @@ class BindingViewModel(val container: AppContainer) : ViewModel() {
         fun valid() = expected == session() && generation == qrGeneration
         if (qrKey == null) {
             state.update { it.copy(qrUrl = null, qrMessage = "正在生成二维码…") }
-            when (val key = appResult { container.bindingRepository.qrKey(expected) }) {
+            when (val key = appResult { native("ncmbind/qr/key").text("key") }) {
                 is AppResult.Failure -> {
                     if (valid()) state.update { it.copy(qrMessage = failureMessage(key, "二维码生成")) }
                     return
@@ -205,7 +223,7 @@ class BindingViewModel(val container: AppContainer) : ViewModel() {
                 is AppResult.Success -> {
                     if (!valid()) return
                     qrKey = key.value
-                    state.update { it.copy(qrUrl = container.bindingRepository.qrUrl(key.value), qrMessage = "等待扫码…") }
+                    state.update { it.copy(qrUrl = "https://music.163.com/login?codekey=" + key.value, qrMessage = "等待扫码…") }
                 }
             }
         }
@@ -213,7 +231,7 @@ class BindingViewModel(val container: AppContainer) : ViewModel() {
         var retryDelay = 2000L
         // Resume checks the existing key immediately, including confirmation made in the NCM app.
         while (currentCoroutineContext().isActive && valid()) {
-            when (val status = appResult { container.bindingRepository.qrStatus(key, expected) }) {
+            when (val status = appResult { native("ncmbind/qr/check", query = mapOf("key" to key)) }) {
                 is AppResult.Failure -> {
                     if (!valid()) return
                     if (status.kind in listOf(ErrorKind.Unauthorized, ErrorKind.Forbidden, ErrorKind.NotFound)) {
@@ -227,7 +245,7 @@ class BindingViewModel(val container: AppContainer) : ViewModel() {
                 is AppResult.Success -> {
                     if (!valid()) return
                     retryDelay = 2000L
-                    when (status.value.code) {
+                    when (status.value.int("code")) {
                         800 -> {
                             qrTerminal = true
                             state.update { it.copy(qrMessage = "二维码已过期，请刷新", qrUrl = null) }

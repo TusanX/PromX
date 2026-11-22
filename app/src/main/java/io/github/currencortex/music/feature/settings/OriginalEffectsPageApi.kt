@@ -27,7 +27,7 @@ class OriginalEffectsPageApi(private val container: AppContainer, private val vm
         if (method.length > 160 || params.toString().length > 32_768) fail("页面请求过大", 400)
         return when (method) {
             "app.info", "getAppInfo" -> buildJsonObject {
-                put("appName", "CurrentMusic"); put("version", BuildConfig.VERSION_NAME)
+                put("appName", "Prom"); put("version", BuildConfig.VERSION_NAME)
                 put("clientVersion", BuildConfig.VERSION_NAME); put("compatibilityVersion", "9.5.30")
                 put("platform", "android")
             }
@@ -369,7 +369,7 @@ class OriginalEffectsPageApi(private val container: AppContainer, private val vm
     }
 
     private fun hostCapabilities(params: JsonObject): JsonObject = buildJsonObject {
-        put("source", "CurrentMusic host capabilities")
+        put("source", "Prom host capabilities")
         put("data", buildJsonObject {
             (params["list"] as? JsonArray).orEmpty().filterIsInstance<JsonObject>().take(16).forEach { row ->
                 val name = row.text("name")

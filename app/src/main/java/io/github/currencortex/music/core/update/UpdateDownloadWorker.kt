@@ -122,7 +122,7 @@ open class UpdateDownloadWorker(context: Context, params: WorkerParameters) : Co
         applicationContext.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "应用更新", NotificationManager.IMPORTANCE_LOW))
         return NotificationCompat.Builder(applicationContext, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("CurrentMusic v${release.version}").setContentIntent(openIntent()).setOnlyAlertOnce(true)
+            .setContentTitle("Prom v${release.version}").setContentIntent(openIntent()).setOnlyAlertOnce(true)
     }
     private fun foreground(release: AppRelease, state: UpdateTransferState): ForegroundInfo {
         val download = state.download as? UpdateDownloadState.Downloading

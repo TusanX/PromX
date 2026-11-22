@@ -72,7 +72,7 @@ class NeteaseFingerprint(context: Context) {
                         // A dead renderer can make individual cleanup operations fail.
                         // Always attempt destroy, including setup/load failures.
                         runCatching { active?.stopLoading() }
-                        runCatching { active?.removeJavascriptInterface("CurrentMusicFingerprint") }
+                        runCatching { active?.removeJavascriptInterface("PromFingerprint") }
                         runCatching { active?.destroy() }
                     }
                 }
@@ -120,7 +120,7 @@ class NeteaseFingerprint(context: Context) {
                             return true // Do not forward script content, audio or fingerprints to logs.
                         }
                     }
-                    active.addJavascriptInterface(FingerprintCallback { result -> main.post { complete(result) } }, "CurrentMusicFingerprint")
+                    active.addJavascriptInterface(FingerprintCallback { result -> main.post { complete(result) } }, "PromFingerprint")
                     if (continuation.isActive)
                         active.loadUrl(DOCUMENT_URL)
                     else close()

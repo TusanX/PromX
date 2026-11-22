@@ -15,7 +15,7 @@ data class Daily(val songs: List<Song>, val forYou: List<Song>, val artists: Lis
 }
 data class Playlist(val id: Long, val name: String, val description: String, val cover: String, val source: String,
     val ownerId: Long, val count: Int, val songs: List<Song>, val nativeOwned: Boolean = false, val nativeLiked: Boolean = false, val remoteId: String = "",
-    val nativeSubscribed: Boolean = false, val nativeSubscriptionKnown: Boolean = true, val playCount: Long = 0) {
+    val nativeSubscribed: Boolean = false) {
     fun editable(accountId: Long) = source !in setOf("ncm", "netease") && ownerId == accountId && accountId > 0
 }
 @Serializable data class PlaylistsDto(val playlists: List<PlaylistDto> = emptyList())
@@ -37,6 +37,11 @@ data class Artist(val id: Long, val name: String, val cover: String, val descrip
 @Serializable data class ArtistIntroduction(@SerialName("ti") val title: String = "", @SerialName("txt") val text: String = "")
 @Serializable data class ArtistBiography(val briefDesc: String = "", val introduction: List<ArtistIntroduction> = emptyList(), val code: Int = 200)
 @Serializable data class ArtistAlbumsDto(val albums: List<AlbumDto> = emptyList(), val more: Boolean = false)
+@Serializable data class FollowedArtistsDto(val artists: List<ArtistDto> = emptyList(), val more: Boolean = false, val total: Int = 0)
+data class FollowedArtist(val id: Long, val name: String, val cover: String, val alias: String = "",
+    val songTotal: Int = 0, val albumTotal: Int = 0)
+data class FollowedArtistsPage(val artists: List<FollowedArtist>, val more: Boolean, val total: Int)
+data class ArtistRelease(val artist: FollowedArtist, val album: Album)
 @Serializable data class ArtistMvsDto(val mvs: List<MvDto> = emptyList(), val more: Boolean = false)
 @Serializable data class ArtistProfile(
     val name: String = "", val cover: String = "", val avatar: String = "", val alias: String = "",
@@ -55,10 +60,7 @@ data class ArtistOverview(val songs: List<Song>, val albums: List<Album>, val ar
     val hasMore: CatalogMore = CatalogMore(), val totals: CatalogTotals = CatalogTotals())
 @Serializable data class CatalogMore(val artist: Boolean = false, val album: Boolean = false, val playlist: Boolean = false)
 @Serializable data class CatalogTotals(val artist: Int = 0, val album: Int = 0, val playlist: Int = 0)
-data class CatalogEntry(val id: Long, val name: String, val cover: String, val subtitle: String = "",
-    val remoteId: String = "") {
-    val stableId get() = remoteId.ifBlank { id.toString() }
-}
+data class CatalogEntry(val id: Long, val name: String, val cover: String, val subtitle: String = "")
 data class CatalogPage(val entries: List<CatalogEntry>, val more: Boolean, val total: Int = 0)
 @Serializable data class MvDto(val id: Long = 0, val name: String = "", val cover: String = "", val artistName: String = "",
     val artistId: Long = 0, val desc: String? = null, val duration: Long = 0)

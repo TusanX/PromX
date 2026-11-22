@@ -71,8 +71,7 @@ internal class RecordShelfPreview(context: Context, private val container: AppCo
             "${container.audioOutput.state.value.mode.label} 使用独占 USB 输出，请使用主播放器播放歌曲"
         }
         coroutineScope {
-            val request = container.audioRequest(song, container.musicSettings.state.value
-                .qualityFor(song.musicSource, container.playbackNetworkStatus.value.kind))
+            val request = container.audioRequest(song, container.musicSettings.state.value.quality)
             audioOwner = request
             val clip = async { container.musicRepository.previewClip(song) }
             val resolved = container.audioSources.resolve(request)

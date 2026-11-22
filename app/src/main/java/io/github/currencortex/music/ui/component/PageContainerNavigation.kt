@@ -35,21 +35,19 @@ internal class PageNavigationSource(val modifier: Modifier, val open: (() -> Uni
 }
 
 @Composable internal fun rememberPageNavigationSource(title: String, summary: String = "",
-    icon: ImageVector? = null, playlistMotion: PlaylistContainerMotion? = null): PageNavigationSource {
+    icon: ImageVector? = null): PageNavigationSource {
     val coordinates=remember {SourceCoordinates()}
     val capture=LocalPageContainerSource.current
     val color=MiuixTheme.colorScheme.surfaceContainer
     val currentColor=rememberUpdatedState(color)
-    // Keep the card's background and subtitle in the container crossfade too. Its
-    // shared cover/title suppress their own drawing while the overlay owns them.
     val layer=if(capture!=null)rememberGraphicsLayer()else null
-    val modifier=Modifier.onGloballyPositioned {coordinates.value=it}.then(if(layer==null)Modifier else Modifier.drawWithContent {
+    val modifier=if(layer==null)Modifier else Modifier.onGloballyPositioned {coordinates.value=it}.drawWithContent {
         layer.record {this@drawWithContent.drawContent()}
         drawLayer(layer)
-    })
+    }
     return PageNavigationSource(modifier) { action ->
         val source=coordinates.value?.takeIf {it.isAttached}
-        if(source!=null&&capture!=null)capture(PageContainerOrigin(source,color,title,summary,icon,currentColor,layer,playlistMotion),action)
+        if(source!=null&&capture!=null)capture(PageContainerOrigin(source,color,title,summary,icon,currentColor,layer),action)
         else action()
     }
 }

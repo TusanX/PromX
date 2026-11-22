@@ -1,6 +1,6 @@
 'use strict';
 
-// CurrentMusicX · Aurora / 曜光配色
+// PromX · Aurora / 曜光配色
 // Hex without #, as required by GitHub's label API.
 const STATUS_LABELS = Object.freeze({
   'status: investigating': {color: '9987C5', description: '正在复现问题或排查原因'},

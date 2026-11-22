@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import io.github.currencortex.music.R
 import io.github.currencortex.music.data.binding.BindingState
 import io.github.currencortex.music.data.binding.NeteaseMembershipTier
 import io.github.currencortex.music.ui.component.nativeui.*
@@ -59,6 +61,31 @@ import java.util.Locale
         else Icon(Icons.Default.Info, null, Modifier.size(18.dp), tint = MiuixTheme.colorScheme.primary)
         Text(text, Modifier.weight(1f), fontSize = 13.sp, lineHeight = 20.sp,
             color = MiuixTheme.colorScheme.onSurface.copy(alpha = .7f))
+    }
+}
+
+@Composable internal fun AltBindingHero(iconRes: Int, title: String, summary: String, accent: Color,
+    features: List<String>, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(24.dp)
+    Column(modifier.fillMaxWidth().clip(shape).background(
+        androidx.compose.ui.graphics.Brush.linearGradient(listOf(accent.copy(alpha = .24f),
+            MiuixTheme.colorScheme.surfaceContainer, MiuixTheme.colorScheme.surfaceContainer))
+    ).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Image(painterResource(iconRes), null, Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(summary, fontSize = 12.sp, lineHeight = 18.sp,
+                    color = MiuixTheme.colorScheme.onSurface.copy(alpha = .56f))
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            features.forEach { feature ->
+                Text(feature, Modifier.clip(CircleShape).background(MiuixTheme.colorScheme.onSurface.copy(alpha = .065f))
+                    .padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onSurface.copy(alpha = .68f), maxLines = 1)
+            }
+        }
     }
 }
 

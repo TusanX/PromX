@@ -129,8 +129,8 @@ class GitHubUpdateChecker(
                 val name = asset.optString("name")
                 val url = asset.optString("browser_download_url")
                 if (name.endsWith(".apk", ignoreCase = true) && url.startsWith(expectedDownloadPrefix) &&
-                    (!nativeAssetsOnly || name.startsWith("CurrentMusic-Android-v")) &&
-                    (!CI_TAG.matches(tag) || name == "CurrentMusic-Android-$tag.apk")) {
+                    (!nativeAssetsOnly || name.startsWith("Prom-Android-v")) &&
+                    (!CI_TAG.matches(tag) || name == "Prom-Android-$tag.apk")) {
                     apkUrl = url
                     assetName = name
                     size = asset.optLong("size", 0L)

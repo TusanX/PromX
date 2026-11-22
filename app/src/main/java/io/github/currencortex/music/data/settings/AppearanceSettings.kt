@@ -1,14 +1,24 @@
 package io.github.currencortex.music.data.settings
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
-enum class PlayerCoverStyle(val label: String) { CIRCLE("圆形封面"), IMMERSIVE("沉浸式封面"), SQUARE("正方形封面") }
+enum class PlayerCoverStyle(val label: String) { CIRCLE("圆形封面"), IMMERSIVE("沉浸式封面") }
 enum class ThemeColorStyle(val label: String) { VIVID("鲜明"), TINTED("染色"), SOFT("柔和"), MONOCHROME("单色") }
-val DefaultThemeColors = listOf(0xFF007AFF, 0xFFCB30E0, 0xFFFF2D55, 0xFFFF383C, 0xFFFF8D28, 0xFFFFCC00, 0xFF34C759, 0xFF8E8E93)
+const val BrandSeedColor = 0xFF5877FFL
+const val LegacyBrandSeedColor = 0xFF17635AL
+val DefaultThemeColors = listOf(
+    BrandSeedColor, // 钴光蓝 · 默认品牌色
+    0xFF2B5FA8,  // 墨蓝
+    0xFF3F6B4A,  // 松绿
+    0xFF8C4A3C,  // 陶土
+    0xFF4A4E5A,  // 石墨
+    0xFF9C3B5A,  // 胭脂
+    0xFF2F7E83,  // 湖水
+    0xFF6B6357,  // 岩灰
+    0xFF8E8E93,  // 中性
+)
 enum class RecordShelfPreviewMode { ONCE, LOOP, NEXT, RANDOM }
 enum class LaunchStyle(val label: String, val description: String) {
-    CLASSIC("经典", "原有文字与头像开屏动画"),
-    HALO("光环", "光环展开、星芒与蓝色粒子，展示当前用户名"),
-    SIGNATURE("签名", "当前用户名连笔写出，柔光定格后进入应用"),
+    CLASSIC("玻璃揭示", "液态玻璃扫过音符标志"),
     NONE("无开屏动画", "启动后直接进入应用"),
 }
 /** Device-reported rates are not limited to a fixed list of 60/90/120 Hz. */
@@ -33,7 +43,7 @@ data class RefreshRatePreference(val hz: Int) {
 }
 
 data class AppearanceSettings(
-    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val themeMode: ThemeMode = ThemeMode.DARK,
     val monet: Boolean = false,
     val uiScale: Float = 1f,
     val blur: Boolean = true,
@@ -43,7 +53,6 @@ data class AppearanceSettings(
     val navigationGlow: Boolean = true,
     val playlistDepthRibbon: Boolean = false,
     val playlistRecordShelf: Boolean = false,
-    val playlistOrders: Map<String, Int> = emptyMap(),
     val recordShelfPreviewMode: RecordShelfPreviewMode = RecordShelfPreviewMode.ONCE,
     val recordShelfFullPreview: Boolean = false,
     val refreshRate: RefreshRatePreference = RefreshRatePreference.SYSTEM,
@@ -53,12 +62,13 @@ data class AppearanceSettings(
     val customFont: String = "",
     val playerDynamicBackground: Boolean = true,
     val pureBlack: Boolean = false,
-    val primaryColor: Long = DefaultThemeColors.first(),
+    val primaryColor: Long = BrandSeedColor,
     val primaryColors: List<Long> = DefaultThemeColors,
     val colorStyle: ThemeColorStyle = ThemeColorStyle.VIVID,
     val customTextScale: Boolean = false,
     val textScale: Float = 1f,
     val playerCoverStyle: PlayerCoverStyle = PlayerCoverStyle.CIRCLE,
+    /** 角色皮肤：默认 / 魔理沙（东方 Project 主题） */
 ) {
     fun normalized() = copy(floatingBar = true,
         uiScale = if (uiScale.isFinite()) uiScale.coerceIn(MIN_SCALE, MAX_SCALE) else 1f,

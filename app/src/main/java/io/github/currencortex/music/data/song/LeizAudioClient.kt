@@ -19,7 +19,7 @@ class LeizAudioClient(endpoint: String = "https://api.bileizhen.top/api/netease"
         val level = if (quality == AudioQuality.AUTO) AudioQuality.JYMASTER.value else quality.value
         val request = Request.Builder().url(base.newBuilder().addQueryParameter("id", "$id")
             .addQueryParameter("level", level).build()).header("x-api-key", key)
-            .header("Accept", "application/json").header("User-Agent", "CurrentMusic-Android/0.1").build()
+            .header("Accept", "application/json").header("User-Agent", "Prom-Android/0.1").build()
         val raw = http.newCall(request).readResponse {
             if (!it.isSuccessful) throw ApiException(when (it.code) {
                 401, 403 -> ErrorKind.AudioKeyRejected

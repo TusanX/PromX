@@ -23,12 +23,20 @@ class LyricsRepository(private val ttml: LyricsProvider, private val fallback: L
     private val alignMatch: (suspend (Song, SavedLyrics) -> SavedLyrics)? = null,
     private val localLyrics: (suspend (Song) -> SavedLyrics?)? = null,
     private val now: () -> Long = System::currentTimeMillis) {
+    /** QQ 音乐直连取词（songmid），由容器在构造后注入 */
+    var directQq: (suspend (Song) -> LyricsDocument?)? = null
+    /** B站：直接读视频自带字幕，由容器在构造后注入 */
+    var directBili: (suspend (Song) -> LyricsDocument?)? = null
     private val lock = Mutex()
     private data class MemoryEntry(val result: LyricsResult, val savedAtMillis: Long, val expiresAtMillis: Long?)
     private val memory = linkedMapOf<Pair<List<Any?>, List<LyricsKey>>, MemoryEntry>()
     suspend fun load(song: Song): LyricsResult = withContext(Dispatchers.IO) { lock.withLock {
         // User-selected files/matches are authoritative, including explicit instrumental results.
-        overrides?.active(song)?.let { saved ->
+        overrides?.active(song)?.takeIf { saved ->
+            // B站 歌曲若之前自动匹配过别处的歌词（旧版本行为），一律忽略，只看视频字幕
+            song.musicSource != io.github.currencortex.music.data.song.MusicSource.BILIBILI ||
+                saved.origin.provider == "bilibili" || saved.origin.provider == "user"
+        }?.let { saved ->
             val aligned = if (saved.timingAlignment == null && saved.origin.provider in
                 setOf("amll", "qq_music", "qishui", "current_music", "kugou")) alignMatch?.invoke(song, saved) ?: saved else saved
             return@withLock LyricsResult(aligned.timingAlignment?.applyTo(aligned.document) ?: aligned.document,
@@ -36,29 +44,47 @@ class LyricsRepository(private val ttml: LyricsProvider, private val fallback: L
         }
         // Local metadata belongs to this exact recording and works without an online reference.
         // Manual imports above remain authoritative. Read afresh so edited file tags are visible.
-        val issues = mutableListOf<LyricsIssue>()
-        fun issue(code: LyricsErrorCode, detail: String) { issues.add(LyricsIssue(code, detail)); log("$code: $detail") }
-        var localFailure: String? = null
         if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.LOCAL) {
             val local = try { localLyrics?.invoke(song) }
             catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                localFailure = if (e is EmbeddedLyricsDecodeException) "本地内嵌歌词格式暂不支持" else "本地内嵌歌词暂时无法读取"
-                issue(LyricsErrorCode.PARSE_ERROR, "$localFailure (${e.javaClass.simpleName})")
-                null
-            }
+            catch (e: Exception) { log("Local lyrics: ${e.javaClass.simpleName}"); null }
             local?.takeIf { it.document.lines.isNotEmpty() }?.let {
                 return@withLock LyricsResult(it.document, origin = it.origin, sourceDocument = it.document)
             }
         }
+        // B站：优先用视频自带字幕（官方时间轴）
+        if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
+            val direct = try { directBili?.invoke(song) } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                log("B站字幕: ${e.javaClass.simpleName}"); null
+            }
+            direct?.takeIf { it.lines.isNotEmpty() }?.let {
+                return@withLock LyricsResult(it, origin = LyricsOrigin("B站字幕", "bilibili"), sourceDocument = it)
+            }
+            // B站 视频的字幕只认「视频自己的」，绝不拿别处的匹配歌词冒充：
+            // 没有 AI/CC 字幕时就明确返回无歌词，让界面显示「暂无字幕」。
+            return@withLock LyricsResult(
+                LyricsDocument(lines = emptyList()),
+                issues = listOf(LyricsIssue(LyricsErrorCode.NO_LYRICS, "B站 视频没有可用字幕")),
+                origin = LyricsOrigin("B站字幕", "bilibili"),
+            )
+        }
+        // QQ 音乐模式下直接用 songmid 取官方歌词
+        if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+            val direct = try { directQq?.invoke(song) } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                log("QQ lyrics: ${e.javaClass.simpleName}"); null
+            }
+            direct?.takeIf { it.lines.isNotEmpty() }?.let {
+                return@withLock LyricsResult(it, origin = LyricsOrigin("QQ 音乐", "qq_music"), sourceDocument = it)
+            }
+        }
         val keys = LyricsMatcher.candidates(song)
         val selected = selection?.invoke()
-        val qqMusic = song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC
-        val selectedOrigin = if (qqMusic) LyricsOrigin("QQ 音乐", "qq_music", song.externalIds.qqMusicId.orEmpty())
-            else if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.EMBY)
+        val selectedOrigin = if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.EMBY)
             LyricsOrigin("Emby", "emby") else if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.NAVIDROME)
             LyricsOrigin("Navidrome", "navidrome") else selected?.origin
         val memoryKey = (selected?.identity.orEmpty() + listOf(selected?.automatic == true, SongLyricsStore.identity(song))) to keys
+        val issues = mutableListOf<LyricsIssue>()
+        fun issue(code: LyricsErrorCode, detail: String) { issues.add(LyricsIssue(code, detail)); log("$code: $detail") }
         fun remember(document: LyricsDocument, origin: LyricsOrigin? = selectedOrigin,
             source: LyricsDocument? = null, alignment: LyricsTimingAlignment? = null,
             expiresAtMillis: Long? = null): LyricsResult {
@@ -81,15 +107,11 @@ class LyricsRepository(private val ttml: LyricsProvider, private val fallback: L
             issue(LyricsErrorCode.NETWORK_ERROR, "Automatic matching: ${e.javaClass.simpleName}")
             null
         }
-        fun unavailable() = LyricsResult(error = localFailure ?: if (automaticFailed) "歌词暂时无法读取，请稍后重试" else "暂无歌词",
+        fun unavailable() = LyricsResult(error = if (automaticFailed) "歌词暂时无法读取，请稍后重试" else "暂无歌词",
             issues = issues.toList())
         // Automatic selection is a fresh comparison on every load. A previous
         // provider/cache result must not take precedence over the current winner.
-        // QQ still gets the direct provider fallback below when auto matching finds nothing.
-        if (selected?.automatic == true) {
-            matchAutomatically()?.let { return@withLock it }
-            if (!qqMusic) return@withLock unavailable()
-        }
+        if (selected?.automatic == true) return@withLock matchAutomatically() ?: unavailable()
         memory[memoryKey]?.takeIf { keys.isNotEmpty() }?.let { entry ->
             val at = now()
             if (entry.expiresAtMillis == null || at >= entry.savedAtMillis && at < entry.expiresAtMillis)
@@ -110,7 +132,7 @@ class LyricsRepository(private val ttml: LyricsProvider, private val fallback: L
                 try { cache.remove(key) } catch (e: Exception) { issue(LyricsErrorCode.PARSE_ERROR, "Cache removal: ${e.javaClass.simpleName}") }
             } catch (e: Exception) { issue(LyricsErrorCode.PARSE_ERROR, "Cache read: ${e.javaClass.simpleName}") }
         }
-        for (provider in if (qqMusic) listOf(ttml, fallback) else selected?.let { listOf(it.provider) } ?: listOf(ttml, fallback)) {
+        for (provider in selected?.let { listOf(it.provider) } ?: listOf(ttml, fallback)) {
             val result = try { provider.findLyrics(song) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { issue(LyricsErrorCode.NETWORK_ERROR, "Provider: ${e.javaClass.simpleName}"); continue }

@@ -30,7 +30,7 @@ class PlayerAiController(private val repository: PlayerAiRepository, private val
         if (value.busy || value.draft.isBlank()) return
         val expected = owner ?: return
         if (expected != session() || expected.token.isNullOrBlank()) {
-            state.update { it.copy(error = "登录 CurrentMusic 后可向 AI 提问") }; return
+            state.update { it.copy(error = "登录 Prom 后可向 AI 提问") }; return
         }
         val generation = epoch
         state.value = value.copy(turns = value.turns.takeLast(5) + PlayerAiTurn(value.draft), draft = "", busy = true, error = null)

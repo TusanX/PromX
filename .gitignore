@@ -5,6 +5,7 @@
 /.idea
 .DS_Store
 **/build/
+**/node_modules/
 __pycache__/
 *.pyc
 /captures
@@ -14,6 +15,8 @@ keystore.properties
 *.jks
 *.keystore
 /.verification/
+/.work/
+/work/
 /.workbuddy-ai/
 /update-proxy.properties
 /services/update-proxy/
@@ -35,6 +38,7 @@ keystore.properties
 *.markdown
 !README.md
 !README-*.md
+!FORK-NOTICE.md
 !/PRIVACY.md
 !/THIRD_PARTY_NOTICES.md
 !/NETEASE_USB_OUTPUT.md

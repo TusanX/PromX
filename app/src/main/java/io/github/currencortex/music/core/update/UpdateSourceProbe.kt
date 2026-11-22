@@ -57,7 +57,7 @@ class UpdateSourceProbe(
                     .newCall(Request.Builder().url(url).header("Range", "bytes=0-3")
                     .header("Accept-Encoding", "identity")
                     .header("Accept", "application/vnd.android.package-archive, application/octet-stream")
-                    .header("User-Agent", "CurrentMusic updater").build())
+                    .header("User-Agent", "Prom updater").build())
                 call.timeout().timeout(remaining, TimeUnit.NANOSECONDS)
                 val cancel = currentCoroutineContext().job.invokeOnCompletion(onCancelling = true, invokeImmediately = true) {
                     if (it != null) call.cancel()

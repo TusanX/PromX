@@ -17,8 +17,7 @@ data class ChatState(val messages: List<ChatMessage> = emptyList(), val members:
     val draft: String = "", val image: String = "", val sending: Boolean = false, val uploading: Boolean = false,
     val error: String? = null, val actionError: String? = null, val deleting: Long? = null,
     val scrollRequest: Long = 0, val attachments: List<PostAttachment> = emptyList(),
-    val suggestions: List<ProfileUser> = emptyList(), val references: List<PostAttachment> = emptyList(), val referenceBusy: Boolean = false,
-    val quoting: ChatMessage? = null)
+    val suggestions: List<ProfileUser> = emptyList(), val references: List<PostAttachment> = emptyList(), val referenceBusy: Boolean = false)
 
 class ChatViewModel(val container: AppContainer) : ViewModel() {
     val state = MutableStateFlow(ChatState())
@@ -71,11 +70,8 @@ class ChatViewModel(val container: AppContainer) : ViewModel() {
                                 if (replay.events.isEmpty() && replay.latestSeq > state.value.seq) {
                                     // A retention gap needs a fresh snapshot, not a silent cursor jump.
                                     val page = repository.messages(expected = expected)
-                                    if (current(expected)) state.update {
-                                        val snapshot = page.distinctBy(ChatMessage::id).sortedBy(ChatMessage::id)
-                                        it.copy(messages = snapshot, hasOlder = page.size >= 30, seq = replay.latestSeq,
-                                            quoting = quotingInSnapshot(it.quoting, snapshot))
-                                    }
+                                    if (current(expected)) state.update { it.copy(messages = page.distinctBy(ChatMessage::id)
+                                        .sortedBy(ChatMessage::id), hasOlder = page.size >= 30, seq = replay.latestSeq) }
                                 }
                                 events.events(expected, state.value.seq, onOpen = {
                                     if (current(expected)) state.update { it.copy(connected = true, error = null) }
@@ -100,8 +96,7 @@ class ChatViewModel(val container: AppContainer) : ViewModel() {
     private fun accept(event: ChatLiveEvent, expected: RequestSession) {
         if (!current(expected) || event.seq <= state.value.seq) return
         val messages = applyChatEvent(state.value.messages, event)
-        state.update { it.copy(messages = messages, seq = event.seq, error = null,
-            quoting = quotingAfterEvent(it.quoting, event)) }
+        state.update { it.copy(messages = messages, seq = event.seq, error = null) }
     }
     fun retry() { if (!state.value.loaded) state.update { it.copy(error = null) }; refresh.update { it + 1 } }
     fun loadOlder() {
@@ -148,16 +143,6 @@ class ChatViewModel(val container: AppContainer) : ViewModel() {
     }
     fun attach(card: PostAttachment) { state.update { it.copy(attachments = validMusicAttachments(it.attachments + card)) } }
     fun removeAttachment(card: PostAttachment) { if (!state.value.sending) state.update { it.copy(attachments = it.attachments - card) } }
-    fun quote(message: ChatMessage) {
-        if (state.value.sending) return
-        state.update {
-            // The menu capture can outlive a live deletion (menu callback delay); re-resolve
-            // against the current list so a removed target never becomes a pending quote.
-            val target = resolveQuoteTarget(it.messages, message) ?: return@update it
-            it.copy(quoting = target, actionError = null)
-        }
-    }
-    fun cancelQuote() { if (!state.value.sending) state.update { it.copy(quoting = null) } }
     fun mention(user: ProfileUser) {
         if (user.nickname.isBlank()) return
         state.update {
@@ -170,7 +155,7 @@ class ChatViewModel(val container: AppContainer) : ViewModel() {
     fun upload(resolver: ContentResolver, uri: Uri) {
         if (state.value.uploading || state.value.sending) return
         val expected = session()
-        if (expected.token == null) { state.update { it.copy(actionError = "登录 CurrentMusic 后可发送图片") }; return }
+        if (expected.token == null) { state.update { it.copy(actionError = "登录 Prom 后可发送图片") }; return }
         state.update { it.copy(uploading = true, actionError = null) }
         upload = viewModelScope.launch {
             val result = appResult { repository.upload(withContext(Dispatchers.IO) { ProfileViewModel.avatarBytes(resolver, uri) }, expected) }
@@ -183,16 +168,15 @@ class ChatViewModel(val container: AppContainer) : ViewModel() {
         val value = state.value
         if (value.sending || value.uploading || (value.draft.isBlank() && value.image.isBlank() && value.attachments.isEmpty())) return
         val expected = session()
-        if (expected.token == null) { state.update { it.copy(actionError = "登录 CurrentMusic 后即可聊天") }; return }
+        if (expected.token == null) { state.update { it.copy(actionError = "登录 Prom 后即可聊天") }; return }
         val mentions = chatMentions(value.draft, value.members)
         state.update { it.copy(sending = true, actionError = null) }
         action = viewModelScope.launch {
-            when (val result = appResult { repository.send(value.draft, value.image, mentions, expected, value.attachments, value.quoting?.id ?: 0) }) {
+            when (val result = appResult { repository.send(value.draft, value.image, mentions, expected, value.attachments) }) {
                 is AppResult.Success -> if (current(expected)) state.update { it.copy(sending = false,
                     messages = (it.messages + result.value).distinctBy(ChatMessage::id).sortedBy(ChatMessage::id),
                     draft = if (it.draft == value.draft) "" else it.draft, image = if (it.image == value.image) "" else it.image,
                     attachments = if (it.attachments == value.attachments) emptyList() else it.attachments,
-                    quoting = if (it.quoting?.id == value.quoting?.id) null else it.quoting,
                     scrollRequest = it.scrollRequest + 1) }
                 is AppResult.Failure -> if (current(expected)) state.update { it.copy(sending = false,
                     actionError = "${result.kind.message}，草稿已保留，请确认后重试") }
@@ -205,9 +189,7 @@ class ChatViewModel(val container: AppContainer) : ViewModel() {
         state.update { it.copy(deleting = message.id, actionError = null) }
         viewModelScope.launch {
             when (val result = appResult { repository.delete(message.id, expected) }) {
-                is AppResult.Success -> if (current(expected)) state.update { it.copy(deleting = null,
-                    messages = it.messages.filterNot { m -> m.id == message.id },
-                    quoting = if (it.quoting?.id == message.id) null else it.quoting) }
+                is AppResult.Success -> if (current(expected)) state.update { it.copy(deleting = null, messages = it.messages.filterNot { m -> m.id == message.id }) }
                 is AppResult.Failure -> if (current(expected)) state.update { it.copy(deleting = null, actionError = result.kind.message) }
             }
         }
@@ -232,21 +214,3 @@ internal fun applyChatEvent(messages: List<ChatMessage>, event: ChatLiveEvent): 
 internal fun chatMentions(content: String, members: List<ProfileUser>) = members.filter {
     it.id > 0 && it.nickname.isNotBlank() && Regex("@${Regex.escape(it.nickname)}(?=\\s|$)").containsMatchIn(content)
 }.map { it.id }.distinct().take(10)
-
-/** A live deletion of the quoted target must drop the pending quote, not just the list row. */
-internal fun quotingAfterEvent(quoting: ChatMessage?, event: ChatLiveEvent): ChatMessage? =
-    if (event.type == "delete" && quoting != null &&
-        event.payload.jsonObject["id"]?.jsonPrimitive?.longOrNull == quoting.id) null else quoting
-
-/** Re-resolve a menu-captured quote target against the live list; null once it is gone. */
-internal fun resolveQuoteTarget(messages: List<ChatMessage>, captured: ChatMessage): ChatMessage? =
-    messages.firstOrNull { it.id == captured.id }
-
-/** A retention-gap snapshot never delivers delete events; revalidate the pending quote against it. */
-internal fun quotingInSnapshot(quoting: ChatMessage?, snapshot: List<ChatMessage>): ChatMessage? =
-    quoting?.let { resolveQuoteTarget(snapshot, it) }
-
-/** Single-line bounded preview so multiline quotes cannot squeeze the composer. */
-internal fun quotePreview(content: String, image: String): String =
-    content.ifBlank { if (image.isNotEmpty()) "[图片]" else "[消息]" }
-        .replace(Regex("\\s+"), " ").trim().take(100)

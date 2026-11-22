@@ -44,6 +44,40 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
         val dto = api.decode<CommentPageDto>(call("GET", path, query))
         return SongCommentsPage(dto.comments.map(CommentDto::toDomain), dto.total, dto.more, dto.nextCursor, dto.meUid)
     }
+    /** 按歌曲来源分派：QQ 音乐走自己的评论接口（无需登录） */
+    suspend fun comments(song: Song, sort: CommentSort, page: Int = 1): SongCommentsPage {
+        // B站：按 aid 查视频评论（type=1）
+        if (song.musicSource == MusicSource.BILIBILI) {
+            val bvid = song.externalIds.bilibiliBvid ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
+            val info = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.BiliPlayback.videoInfo(bvid)
+            } ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
+            val raw = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.BiliPlayback.comments(
+                    info.aid, hot = sort != CommentSort.LATEST, page = page)
+            }
+            val list = raw.mapIndexed { index, c ->
+                NeteaseComment(index.toLong(), c.content, c.timeSec * 1000, c.likes,
+                    NeteaseCommentUser(c.user, c.avatar), emptyList(), c.id.ifBlank { "${info.aid}-$index" },
+                    0, false, 0)
+            }
+            return SongCommentsPage(list, list.size.toLong(), false, null, 0)
+        }
+        if (song.musicSource != MusicSource.QQ_MUSIC) return comments(song.id, sort, page)
+        // 评论接口只认数字 songid：搜不到就先按歌名回查一次，再退到哈希（那基本等于没评论）
+        val numeric = song.externalIds.qqNumericId?.toLongOrNull()
+            ?: kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqExtras.resolveSongId(song.name, song.artists)
+            }
+            ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
+        val raw = io.github.currencortex.music.core.alt.QqExtras.comments(numeric, page - 1)
+        val list = raw.mapIndexed { index, (content, nick, likes) ->
+            NeteaseComment(index.toLong(), content, 0, likes, NeteaseCommentUser(nick, ""), emptyList(),
+                "$numeric-$index", 0, false, 0)
+        }
+        return SongCommentsPage(list, list.size.toLong(), false, null, 0)
+    }
+
     suspend fun comments(id: Long, sort: CommentSort, page: Int = 1, cursor: String? = null): SongCommentsPage =
         page("ncm/comments/page", buildMap {
             put("type", "0"); put("id", "$id"); put("sort", sort.value); put("page", "$page"); put("limit", "20")

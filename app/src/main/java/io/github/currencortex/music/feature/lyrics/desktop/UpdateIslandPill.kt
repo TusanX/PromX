@@ -98,7 +98,7 @@ import io.github.currencortex.music.core.media.SoundEffectNoticePhase
         if (ready) {
             val context = LocalContext.current
             val icon = remember(context) { context.applicationInfo.loadIcon(context.packageManager).toBitmap(96, 96).asImageBitmap() }
-            Image(BitmapPainter(icon), "CurrentMusic", Modifier.size(iconSize).clip(CircleShape))
+            Image(BitmapPainter(icon), "Prom", Modifier.size(iconSize).clip(CircleShape))
         } else Canvas(Modifier.size(iconSize)) {
             val stroke = 1.8.dp.toPx()
             if (downloading) {

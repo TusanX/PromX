@@ -44,7 +44,7 @@ class NavidromeClient(private val access: () -> NavidromeAccess?) {
             val salt = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
             builder.addQueryParameter("u", account.username).addQueryParameter("s", salt)
                 .addQueryParameter("t", digest("MD5", account.password + salt))
-                .addQueryParameter("v", "1.16.1").addQueryParameter("c", "CurrentMusicX").addQueryParameter("f", "json")
+                .addQueryParameter("v", "1.16.1").addQueryParameter("c", "PromX").addQueryParameter("f", "json")
         } else builder.addQueryParameter(MARKER, account.identity)
         return builder.build()
     }

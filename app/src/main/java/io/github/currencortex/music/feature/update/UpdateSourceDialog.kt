@@ -33,7 +33,7 @@ import top.yukonga.miuix.kmp.blur.Backdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 internal val UpdateSource.menuLabel:String get()=when(this) {
-    UpdateSource.CURRENTMUSIC->"CurrentMusic"
+    UpdateSource.CURRENTMUSIC->"Prom"
     UpdateSource.GITHUB->"github.com"
     else->label
 }
@@ -58,7 +58,7 @@ internal val UpdateSource.menuLabel:String get()=when(this) {
         val target = try {
             release?.takeIf { it.apkUrl != null && it.isCi == (channel == UpdateChannel.CI) } ?: withContext(Dispatchers.IO) {
                 GitHubUpdateChecker(AppMetadata.RELEASES_OWNER, AppMetadata.RELEASES_REPO,
-                    "0.0.0", "CurrentMusic updater", nativeAssetsOnly = true).check(channel)
+                    "0.0.0", "Prom updater", nativeAssetsOnly = true).check(channel)
             }
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (_: Exception) { null }
@@ -81,7 +81,7 @@ internal val UpdateSource.menuLabel:String get()=when(this) {
     val health = rememberUpdateSourceHealth(release, channel, true, sourceCheck)
     val orderedSources = sources.sortedByHealth(health)
     UpdateOptionsDialog("下载来源", summary =
-        (if (downloading) "切换来源后，将从头重新下载。\n" else "") + (if (channel == UpdateChannel.CI) "CI 构建使用对应版本的下载地址，可用来源按响应速度排序。" else "CurrentMusic 固定置顶，其他可用来源按响应速度排序。"),
+        (if (downloading) "切换来源后，将从头重新下载。\n" else "") + (if (channel == UpdateChannel.CI) "CI 构建使用对应版本的下载地址，可用来源按响应速度排序。" else "Prom 固定置顶，其他可用来源按响应速度排序。"),
         onDismiss = onDismiss, backdrop = backdrop, choiceLayout = true, actions = {
             UpdateDialogAction("取消", onDismiss, Modifier.weight(1f).testTag("update_source_cancel"), compact = true)
         }) {

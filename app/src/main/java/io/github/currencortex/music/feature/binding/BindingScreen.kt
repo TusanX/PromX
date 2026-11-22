@@ -66,7 +66,7 @@ fun qrPixels(url: String, size: Int = 512): IntArray {
     val tasksEnabled by vm.container.neteaseTasksEnabled.collectAsStateWithLifecycle()
     val taskScope = rememberCoroutineScope()
     val sessionRevision by vm.container.accountRepository.sessionRevision.collectAsStateWithLifecycle()
-    val canLoginNetease = account.account != null && vm.canLoginNetease
+    val canLoginNetease = vm.canLoginNetease
     var qr by rememberSaveable(account.account?.id, settings.server, sessionRevision) { mutableStateOf(true) }
     var generation by remember { mutableIntStateOf(0) }
     var phone by rememberSaveable(account.account?.id, settings.server, sessionRevision) { mutableStateOf("") }
@@ -110,10 +110,10 @@ fun qrPixels(url: String, size: Int = 512): IntArray {
         if (!canLoginNetease) item {
             SettingsGroup(Modifier.fillMaxWidth().testTag("binding_currentmusic_required")) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("先登录 CurrentMusic", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                    Text("请先注册并登录 CurrentMusic 账号，再登录网易云。已有账号可直接登录。",
+                    Text("先登录 Prom", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                    Text("请先注册并登录 Prom 账号，再登录网易云。已有账号可直接登录。",
                         fontSize = 14.sp, lineHeight = 22.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    GlassActionButton("注册 / 登录 CurrentMusic", onCurrentMusicLogin, primary = true,
+                    GlassActionButton("注册 / 登录 Prom", onCurrentMusicLogin, primary = true,
                         modifier = Modifier.fillMaxWidth().testTag("binding_currentmusic_login"))
                 }
             }
@@ -133,25 +133,7 @@ fun qrPixels(url: String, size: Int = 512): IntArray {
                 BindingAction("重试", vm::reload, enabled = !busy)
             }
         } }
-        if (canLoginNetease) item {
-            SettingsGroup(Modifier.testTag("binding_project_sync")) {
-                SettingsPreference("同步至 CurrentMusic", "网易云登录态会通过 HTTPS 同步至当前服务器，供同一账号的网页端和 App 使用。")
-                if (vm.container.apiClient.hasLocalNeteaseLogin) {
-                    SettingsDivider()
-                    SettingsPreference(when {
-                        projectSync.syncing -> "正在同步绑定…"
-                        projectSync.synced -> "绑定已同步"
-                        else -> "绑定尚未同步"
-                    }, projectSync.error ?: if (!projectSync.synced && !projectSync.syncing) "本机登录已保留，可手动重试同步。" else null,
-                        modifier = Modifier.testTag("binding_project_sync_status"), trailing = {
-                            if (projectSync.synced) SettingsSelectionCheck(true)
-                            else GlassActionButton("同步绑定", vm::syncProjectBinding,
-                                Modifier.testTag("binding_project_sync_retry"),
-                                enabled = !busy && !projectSync.syncing, fillWidth = false)
-                        })
-                }
-            }
-        }
+
         state.binding?.let { binding ->
             if (binding.bound) item {
                 BindingAccountCard(binding, busy, { if (musicSettings.neteaseMainLibrary || vm.container.apiClient.hasLocalNeteaseLogin) vm.reloadMusic() else vm.sync() }, vm::live, vm::refresh,
@@ -164,7 +146,7 @@ fun qrPixels(url: String, size: Int = 512): IntArray {
             } else if (canLoginNetease) item {
                 Column(Modifier.padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("连接你的音乐库", fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
-                    Text("连接网易云的我喜欢和歌单，在 CurrentMusic 中继续聆听。", fontSize = 13.sp, lineHeight = 21.sp,
+                    Text("连接网易云的我喜欢和歌单，在 Prom 中继续聆听。", fontSize = 13.sp, lineHeight = 21.sp,
                         color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
                 }
             }
@@ -180,10 +162,10 @@ fun qrPixels(url: String, size: Int = 512): IntArray {
             }
             Spacer(Modifier.height(12.dp))
             Text(if (vm.container.apiClient.hasLocalNeteaseLogin)
-                "当前使用本机网易云登录，登录信息加密保存在此设备。CurrentMusic 云端资产独立同步。"
+                "当前使用本机网易云登录，登录信息加密保存在此设备。Prom 云端资产独立同步。"
                 else if (state.binding?.bound == true)
-                    "已复用当前 CurrentMusic 账号的云端网易云绑定，无需再次扫码。本机登录可用于直连和原版音效。"
-                else "注册并登录 CurrentMusic 后，可在此登录网易云。网易云凭据加密保存在此设备，原生接口仍直连网易云。",
+                    "已复用当前 Prom 账号的云端网易云绑定，无需再次扫码。本机登录可用于直连和原版音效。"
+                else "在这里登录网易云即可解锁播放与推荐。凭据加密保存在本机，接口直连网易云。",
                 fontSize = 12.sp, lineHeight = 19.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f),
                 modifier = Modifier.testTag("netease_direct_notice"))
         }
@@ -247,7 +229,7 @@ fun qrPixels(url: String, size: Int = 512): IntArray {
     SettingsUiScope {
     if (unbind) MusicDialog("解绑网易云音乐？", { if (!busy) unbind = false }) {
         Text(if (vm.container.apiClient.hasLocalNeteaseLogin) "将退出本机网易云账号，云端绑定和歌单会保留。"
-            else "将解除当前 CurrentMusic 账号的云端网易云绑定，已导入歌单会保留为快照。")
+            else "将解除当前 Prom 账号的云端网易云绑定，已导入歌单会保留为快照。")
         MusicDialogButton("确认解绑", onClick = { unbind = false; vm.unbind() }, enabled = !busy, modifier = Modifier.testTag("confirm_unbind"))
         BindingAction("取消", { unbind = false }, enabled = !busy)
     }

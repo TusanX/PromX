@@ -24,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -32,7 +31,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,7 +38,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import top.yukonga.miuix.kmp.basic.Text
 import io.github.currencortex.music.data.song.formatNeteaseCount
-import io.github.currencortex.music.data.song.ChorusSegment
 
 internal data class PlayerButtonVisual(val pressed: Boolean, val scale: Float, val glyphProgress: Float, val alpha: Float)
 internal val PlayerButtonVisuals = SemanticsPropertyKey<PlayerButtonVisual>("PlayerButtonVisuals")
@@ -60,29 +57,40 @@ internal val PlayerSeekVisuals = SemanticsPropertyKey<PlayerSeekVisual>("PlayerS
     }
 }
 
+/**
+ * 视频模式下进度条要驱动视频播放器而不是音频，所以把位置/时长/跳转抽成可覆盖的接口。
+ */
+internal data class TransportOverride(
+    val positionMs: Long,
+    val durationMs: Long,
+    val toggling: Boolean,
+    val playing: Boolean,
+    val seek: (Long) -> Unit,
+)
+
 @Composable internal fun PlayerTransport(vm: PlayerViewModel, onToggle: () -> Unit,
     compact: Boolean = false, quality: (@Composable () -> Unit)? = null,
-    leadingAction: (@Composable () -> Unit)? = null, trailingAction: (@Composable () -> Unit)? = null) {
+    leadingAction: (@Composable () -> Unit)? = null, trailingAction: (@Composable () -> Unit)? = null,
+    override: TransportOverride? = null) {
     val state by vm.state.collectAsStateWithLifecycle()
     val queue by vm.queue.collectAsStateWithLifecycle()
-    val seekTint by rememberPlayerSeekTint(queue.current?.cover.orEmpty())
     val actions by vm.actions.collectAsStateWithLifecycle()
-    // Observe server changes even while the song and playback position are unchanged.
-    val settings by vm.settings.collectAsStateWithLifecycle()
-    val chorus = key(settings.server) { rememberPlayerChorus(queue.current, vm.container.musicRepository.insights) }
-    val currentMatches = state.song?.let { it.id == queue.current?.id && it.musicSource == queue.current?.musicSource &&
-        it.privateIdentity == queue.current?.privateIdentity } == true
-    val knownDuration = state.durationMs.takeIf { it > 0 && currentMatches } ?: queue.current?.durationMs ?: 0
-    val enabled = state.canControlPlayback && queue.current != null
+    val knownDuration = override?.durationMs?.takeIf { it > 0 }
+        ?: state.durationMs.takeIf { it > 0 } ?: queue.current?.durationMs ?: 0
+    val enabled = (override != null || state.canControlPlayback) && queue.current != null
     var drag by remember(queue.current?.id) { mutableStateOf<Float?>(null) }
-    val position = drag?.let { (it * knownDuration).toLong() } ?: state.positionMs
+    val basePosition = override?.positionMs ?: state.positionMs
+    val position = drag?.let { (it * knownDuration).toLong() } ?: basePosition
     val progress: @Composable () -> Unit = {
         Column(Modifier.fillMaxWidth()) {
-            key(queue.current?.id) { PlayerSeekBar(drag ?: (state.positionMs.toFloat() / knownDuration.coerceAtLeast(1)).coerceIn(0f, 1f),
+            key(queue.current?.id) { PlayerSeekBar(drag ?: (basePosition.toFloat() / knownDuration.coerceAtLeast(1)).coerceIn(0f, 1f),
                 enabled && knownDuration > 0, { drag = it }, {
-                    vm.player.seek((it * knownDuration).toLong()); drag = null
-                }, { drag = null }, bufferedValue = if (currentMatches) state.bufferedProgress(knownDuration) else 0f,
-                chorusSegments = chorus, durationMs = knownDuration, tint = seekTint) }
+                    val target = (it * knownDuration).toLong()
+                    if (override != null) override.seek(target) else vm.player.seek(target)
+                    drag = null
+                }, { drag = null },
+                bufferedValue = if (override != null) 0f
+                else if (state.song?.id == queue.current?.id) state.bufferedProgress(knownDuration) else 0f) }
             Box(Modifier.fillMaxWidth()) {
                 Text(formatPlayerTime(position), Modifier.align(Alignment.CenterStart),
                     fontSize = 11.sp, color = Color.White.copy(alpha = .48f))
@@ -100,8 +108,9 @@ internal val PlayerSeekVisuals = SemanticsPropertyKey<PlayerSeekVisual>("PlayerS
             leadingAction?.invoke()
             val transportSlot = if (leadingAction != null || trailingAction != null) Modifier.weight(1f) else Modifier
             PlayerTransportButton("上一首", { vm.player.previous() }, transportSlot, enabled = enabled, direction = -1, compact = compact)
-            PlayerTransportButton(if (state.showPause) "暂停" else "播放", onToggle,
-                transportSlot.testTag("player_toggle"), enabled, state.showPause, compact = compact)
+            val playing = override?.playing ?: state.showPause
+            PlayerTransportButton(if (playing) "暂停" else "播放", onToggle,
+                transportSlot.testTag("player_toggle"), enabled, playing, compact = compact)
             PlayerTransportButton("下一首", { vm.player.next() }, transportSlot, enabled = enabled, direction = 1, compact = compact)
             trailingAction?.invoke()
         }
@@ -111,6 +120,8 @@ internal val PlayerSeekVisuals = SemanticsPropertyKey<PlayerSeekVisual>("PlayerS
         // A fixed status slot keeps the controls still when buffering or permission changes.
         Box(Modifier.fillMaxWidth().height(if (compact) 18.dp else 22.dp), contentAlignment = Alignment.Center) {
             val message = when {
+                // 视频模式：音频被强制静音，它的加载错误与用户无关，别显示
+                override != null -> null
                 state.error != null -> state.error
                 actions.error != null -> actions.error
                 !state.canControlPlayback -> "播放由房主或管理员控制"
@@ -124,12 +135,7 @@ internal val PlayerSeekVisuals = SemanticsPropertyKey<PlayerSeekVisual>("PlayerS
 }
 
 @Composable internal fun PlayerSeekBar(value: Float, enabled: Boolean, onPreview: (Float) -> Unit,
-    onSeek: (Float) -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier, bufferedValue: Float = 0f,
-    chorusSegments: List<ChorusSegment> = emptyList(), durationMs: Long = 0, tint: Color = Color.White) {
-    val chorus = remember(chorusSegments, durationMs) { playerChorusSegments(chorusSegments, durationMs) }
-    val chorusDescription = remember(chorus) {
-        chorus.joinToString("；") { "高潮 ${formatPlayerTime(it.startMs)}–${formatPlayerTime(it.endMs)}" }
-    }
+    onSeek: (Float) -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier, bufferedValue: Float = 0f) {
     val preview by rememberUpdatedState(onPreview)
     val seek by rememberUpdatedState(onSeek)
     val cancel by rememberUpdatedState(onCancel)
@@ -140,26 +146,15 @@ internal val PlayerSeekVisuals = SemanticsPropertyKey<PlayerSeekVisual>("PlayerS
     var dragging by remember { mutableStateOf(false) }
     var target by remember { mutableFloatStateOf(progress) }
     var bounds by remember { mutableStateOf(IntSize.Zero) }
-    val density = LocalDensity.current
-    val chorusTracks = remember(chorus, durationMs, bounds.width, density) {
-        playerSeekChorusTracks(chorus, durationMs, bounds.width.toFloat(), with(density) { 10.dp.toPx() })
-    }
-    val positionMs = (if (pressed) target else progress).toDouble() * durationMs
-    val inChorus = chorus.any { positionMs >= it.startMs && positionMs < it.endMs }
-    val chorusGlow by animateFloatAsState(if (inChorus) 1f else 0f, tween(280), label = "seek chorus colour")
-    val glowTint = lerp(tint, PlayerSeekChorusGold, chorusGlow)
-    val glow = remember(glowTint) { PlayerSeekGlow(glowTint) }
-    val thickness = animateFloatAsState(if (dragging) 6f else 4f,
-        tween(if (dragging) 220 else 280, easing = LinearEasing), label = "seek press")
-    val glowAlpha = animateFloatAsState(if (enabled && !dragging) 1f else 0f,
-        tween(if (dragging || !enabled) 220 else 280, easing = LinearEasing), label = "seek glow visibility")
+    val thickness = animateFloatAsState(if (pressed) 8f else 3f,
+        tween(if (pressed) 100 else 160, easing = CubicBezierEasing(.2f, 0f, 0f, 1f)), label = "seek press")
     val buffered = animateFloatAsState(buffer, tween(180), label = "audio buffer progress")
     Canvas(modifier.fillMaxWidth().height(34.dp).onSizeChanged { bounds = it }.testTag("player_seek").semantics {
         progressBarRangeInfo = ProgressBarRangeInfo(if (pressed) target else progress, 0f..1f)
         contentDescription = "播放进度"
         this[PlayerBufferedProgress] = buffer
         this[PlayerSeekVisuals] = PlayerSeekVisual(pressed, dragging, thickness.value)
-        stateDescription = "已加载 ${(buffer * 100).toInt()}%" + if (chorus.isEmpty()) "" else "；$chorusDescription"
+        stateDescription = "已加载 ${(buffer * 100).toInt()}%"
         if (enabled) setProgress {
             if (!it.isFinite()) false else { seek(it.coerceIn(0f, 1f)); true }
         } else disabled()
@@ -223,17 +218,12 @@ internal val PlayerSeekVisuals = SemanticsPropertyKey<PlayerSeekVisual>("PlayerS
         val y = size.height / 2
         val end = size.width * if (pressed) target else progress
         val stroke = thickness.value.dp.toPx()
-        val ink = if (enabled) tint else Color.White.copy(alpha = .28f)
-        if (glowAlpha.value > 0f) with(glow) { drawHalo(end, stroke, glowAlpha.value) }
+        val ink = Color.White.copy(alpha = if (enabled) .85f else .28f)
         drawLine(Color.White.copy(alpha = .18f), Offset(0f, y), Offset(size.width, y), stroke, StrokeCap.Round)
         if (buffered.value > 0f) drawLine(Color.White.copy(alpha = .42f), Offset(0f, y),
             Offset(size.width * buffered.value, y), stroke, StrokeCap.Round)
-        if (end > 0f) drawLine(ink, Offset(0f, y), Offset(end, y), stroke, StrokeCap.Round)
-        // Draw above the buffer/progress so markers remain visible after playback passes them.
-        // Distinct played/unplayed shades preserve the playhead position inside a chorus.
-        chorusTracks.forEach { track -> with(track) { draw(end, stroke, enabled) } }
-        // Continue the highlight through the gold section and rounded cap without a separate white tip.
-        if (enabled) with(glow) { drawHighlight(end, stroke) }
+        drawLine(ink, Offset(0f, y), Offset(end, y), stroke, StrokeCap.Round)
+        if (pressed) drawCircle(ink, 6.dp.toPx(), Offset(end, y))
     }
 }
 
@@ -255,20 +245,21 @@ internal val PlayerSeekVisuals = SemanticsPropertyKey<PlayerSeekVisual>("PlayerS
         }) {
             val ink = Color.White.copy(alpha = if (enabled) 1f else .28f)
             if (direction == 0) {
-                PlayerSharedControlIcon(PlayerSharedControl.TOGGLE, ink, Modifier.fillMaxSize(), playing = playing)
+                Image(painterResource(R.drawable.player_symbol_play_arrow_fill1), null,
+                    Modifier.fillMaxSize().graphicsLayer { alpha = 1 - glyph.value }, colorFilter = ColorFilter.tint(ink))
+                Image(painterResource(R.drawable.player_symbol_pause_fill1), null,
+                    Modifier.fillMaxSize().graphicsLayer { alpha = glyph.value }, colorFilter = ColorFilter.tint(ink))
             } else Image(painterResource(if (direction < 0) R.drawable.player_symbol_skip_previous_fill1 else R.drawable.player_symbol_skip_next_fill1),
                 null, Modifier.fillMaxSize(), colorFilter = ColorFilter.tint(ink))
         }
     }
 }
 
-internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, LIKE, COMMENT, ALARM, REPEAT, REPEAT_ONE, SHUFFLE, HEART_MODE }
+internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, LIKE, COMMENT, ALARM, REPEAT, REPEAT_ONE, SHUFFLE, HEART_MODE, VIDEO, DOWNLOAD }
 
 @Composable internal fun PlayerIconButton(icon: PlayerIcon, label: String, onClick: () -> Unit,
-    modifier: Modifier = Modifier, selected: Boolean = false, count: Long? = null, countLabel: String? = null,
-    showCount: Boolean = false,
-    enabled: Boolean = true, loading: Boolean = false, onLongClick: (() -> Unit)? = null,
-    onLongClickLabel: String = "选择其他歌单") {
+    modifier: Modifier = Modifier, selected: Boolean = false, count: Long? = null, showCount: Boolean = false,
+    enabled: Boolean = true, loading: Boolean = false, onLongClick: (() -> Unit)? = null) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
     val scale = animateFloatAsState(if (pressed && enabled) .88f else 1f,
@@ -278,8 +269,8 @@ internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, 
         infiniteRepeatable(tween(900, easing = LinearEasing)), label = "action spinner").value else 0f
     Box(modifier.size(48.dp).combinedClickable(enabled = enabled, role = Role.Button, interactionSource = interactions,
         indication = null, onClick = onClick, onLongClick = onLongClick,
-        onLongClickLabel = if (onLongClick != null) onLongClickLabel else null).semantics {
-            contentDescription = label + (countLabel ?: count?.toString())?.let { "，数量 $it" }.orEmpty(); this.selected = selected
+        onLongClickLabel = if (onLongClick != null) "选择其他歌单" else null).semantics {
+            contentDescription = label + if (count != null) "，数量 $count" else ""; this.selected = selected
             if (!enabled) disabled()
             this[PlayerButtonVisuals] = PlayerButtonVisual(pressed, scale.value, 0f, opacity.value)
         }, contentAlignment = Alignment.Center) {
@@ -288,8 +279,6 @@ internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, 
         val iconModifier = Modifier.size(24.dp).graphicsLayer { scaleX = scale.value; scaleY = scaleX }
         if (loading) Canvas(iconModifier) {
             drawArc(ink, rotation, 270f, false, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
-        } else if (icon == PlayerIcon.QUEUE) {
-            PlayerSharedControlIcon(PlayerSharedControl.QUEUE, ink, iconModifier)
         } else Image(painterResource(when (icon) {
             PlayerIcon.COLLAPSE -> R.drawable.player_symbol_keyboard_arrow_down
             PlayerIcon.MORE -> R.drawable.player_symbol_more_horiz
@@ -304,10 +293,14 @@ internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, 
             PlayerIcon.REPEAT_ONE -> R.drawable.player_symbol_repeat_one
             PlayerIcon.SHUFFLE -> R.drawable.player_symbol_shuffle
             PlayerIcon.HEART_MODE -> R.drawable.player_symbol_ecg_heart
+            PlayerIcon.VIDEO -> R.drawable.player_symbol_smart_display
+            PlayerIcon.DOWNLOAD -> R.drawable.player_symbol_download
         }), null, iconModifier, colorFilter = ColorFilter.tint(ink))
-        if (showCount) Text(countLabel ?: count?.let(::formatNeteaseCount) ?: "—", fontSize = 9.sp,
-            color = Color.White.copy(alpha = .8f), maxLines = 1,
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = 2.dp).testTag("${icon.name.lowercase()}_count"))
+        // 计数放在图标下方：四位数的 B站 收藏数在右上角会压住图标
+        if (showCount) Text(count?.let(::formatNeteaseCount) ?: "", fontSize = 9.sp,
+            color = Color.White.copy(alpha = .72f), maxLines = 1,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 1.dp)
+                .testTag("${icon.name.lowercase()}_count"))
     }
 }
 

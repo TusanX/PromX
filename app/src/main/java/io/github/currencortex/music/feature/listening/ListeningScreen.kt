@@ -108,7 +108,7 @@ internal fun listeningToday(source: ListeningSource, clock: Clock = Clock.system
         }
     }
     val exportInfo=ListeningWallExportInfo(
-        nickname=if(source==ListeningSource.NETEASE) session.profile?.nickname.orEmpty() else "CurrentMusicX",
+        nickname=if(source==ListeningSource.NETEASE) session.profile?.nickname.orEmpty() else "PromX",
         timeline="${range.start.monthValue}.${range.start.dayOfMonth}-${range.end.monthValue}.${range.end.dayOfMonth}",
         songTitles=report?.tracks.orEmpty().map { it.title },isCloud=source==ListeningSource.NETEASE,
         cloudVip=report?.cloudVip,superVip=report?.superVip==true)

@@ -17,8 +17,7 @@ import kotlin.coroutines.resumeWithException
 data class NeteaseEndpoints(val web: String = "https://music.163.com/", val desktop: String = "https://interfacepc.music.163.com/",
     val clientLog: String = "https://clientlog.music.163.com/")
 internal enum class NeteaseEncoding { WEB, DESKTOP, LOG }
-internal enum class NeteaseClientProfile { DESKTOP, ANDROID, PLAYBACK }
-internal const val NETEASE_PLAYBACK_DEVICE_NAME = "CurrentMusicX"
+internal enum class NeteaseClientProfile { DESKTOP, ANDROID }
 internal class NeteaseResponse(val body: JsonObject, val cookies: Map<String, String>) {
     override fun toString() = "NeteaseResponse([redacted])"
 }
@@ -33,8 +32,7 @@ class NeteaseTransport(val sessions: NeteaseSessionStore, private val endpoints:
     internal suspend fun request(path: String, data: JsonObject = buildJsonObject {},
         encoding: NeteaseEncoding = NeteaseEncoding.DESKTOP, session: NeteaseSession? = null,
         cookieOverride: Map<String, String>? = null, saveCookies: Boolean = true,
-        clientProfile: NeteaseClientProfile = NeteaseClientProfile.DESKTOP,
-        callTimeoutMs: Long? = null): NeteaseResponse = withContext(Dispatchers.IO) {
+        clientProfile: NeteaseClientProfile = NeteaseClientProfile.DESKTOP): NeteaseResponse = withContext(Dispatchers.IO) {
         val expected = session ?: sessions.snapshot()
         val cookies = cookieOverride ?: expected.credential.cookies
         require(path.startsWith("/api/") && '?' !in path && '#' !in path)
@@ -45,15 +43,7 @@ class NeteaseTransport(val sessions: NeteaseSessionStore, private val endpoints:
         val common = platform + mapOf(
             "deviceId" to expected.credential.deviceId, "channel" to "netease", "__remember_me" to "true") + cookies +
             (if (encoding == NeteaseEncoding.LOG) mapOf("os" to "osx") else emptyMap())
-        val requestCommon = when (clientProfile) {
-            NeteaseClientProfile.DESKTOP -> common
-            NeteaseClientProfile.ANDROID -> common + platform
-            NeteaseClientProfile.PLAYBACK -> common + mapOf(
-                "deviceId" to (cookies["deviceId"]?.takeIf(String::isNotBlank) ?: expected.credential.deviceId),
-                "mobilename" to NETEASE_PLAYBACK_DEVICE_NAME,
-                "mode" to NETEASE_PLAYBACK_DEVICE_NAME,
-            )
-        }
+        val requestCommon = if (clientProfile == NeteaseClientProfile.ANDROID) common + platform else common
         val header = buildJsonObject {
             requestCommon.forEach { (key, value) -> put(key, value) }
             put("__csrf", cookies["__csrf"].orEmpty())
@@ -75,7 +65,6 @@ class NeteaseTransport(val sessions: NeteaseSessionStore, private val endpoints:
             .header("Cookie", requestCommon.entries.joinToString("; ") { "${it.key}=${it.value}" }).build()
         val response = suspendCancellableCoroutine<BufferedResponse> { cont ->
             val call = http.newCall(request)
-            callTimeoutMs?.let { call.timeout().timeout(it, TimeUnit.MILLISECONDS) }
             cont.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) { if (!cont.isCancelled) cont.resumeWithException(e) }
@@ -119,9 +108,6 @@ class NeteaseTransport(val sessions: NeteaseSessionStore, private val endpoints:
                 ApiJson.parseToJsonElement(plain.toString(Charsets.UTF_8)) as? JsonObject ?: throw ApiException(ErrorKind.Parse)
             } catch (failure: ApiException) { throw failure
             } catch (_: Exception) { throw ApiException(ErrorKind.Parse) }
-            val businessCode = (raw["code"] as? JsonPrimitive)?.intOrNull
-            if (businessCode != null && businessCode != 200)
-                log("NetEase $path business code $businessCode (HTTP ${response.code})")
             val changed = response.headers.values("Set-Cookie").mapNotNull { value -> Cookie.parse(url, value) }
                 .filter { cookie -> cookie.expiresAt > System.currentTimeMillis() }.associate { cookie -> cookie.name to cookie.value }
             currentCoroutineContext().ensureActive()

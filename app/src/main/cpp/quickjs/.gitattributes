@@ -1,3 +1,0 @@
-* text eol=lf
-*.c linguist-vendored whitespace=-blank-at-eol,-blank-at-eof
-*.h linguist-vendored whitespace=-blank-at-eol,-blank-at-eof

@@ -4,6 +4,7 @@
 package io.github.currencortex.music.feature.lyrics.domain
 
 import io.github.currencortex.music.data.song.Song
+import io.github.currencortex.music.data.song.MusicSource
 import io.github.currencortex.music.feature.lyrics.data.LyricsCandidate
 import org.mozilla.javascript.Context
 import org.mozilla.javascript.ContextFactory
@@ -49,10 +50,22 @@ object FoliaLyricsMatchPolicy {
         return Details((capped * multiplier).roundToInt().coerceIn(0, 100), titleMatched, artistMatched, albumMatched, durationMatched)
     }
 
+    /** B站标题常带【无损音质】/MV/emoji 等装饰，匹配歌词前先剥掉，否则搜到的不是同一首歌 */
+    private fun cleanBiliTitle(raw: String): String = raw
+        .replace(Regex("【[^】]*】"), " ")
+        .replace(Regex("\\[[^\\]]*\\]"), " ")
+        .replace(Regex("（[^）]*(合集|完整版|循环|纯享)[^）]*）"), " ")
+        .replace(Regex("\\b(MV|Mv|mv|P\\d+|4K|1080P|HiRes|高音质|无损音质|动态歌词|字幕版)\\b"), " ")
+        .replace(Regex("[\\p{So}\\p{Sk}]"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
     fun query(song: Song): String {
-        val prefix = Regex("^(.+?)\\s+-\\s+(.+)$").find(song.name.trim())
+        val cleanedName = if (song.musicSource == MusicSource.BILIBILI) cleanBiliTitle(song.name) else song.name
+        val base = cleanedName.ifBlank { song.name }
+        val prefix = Regex("^(.+?)\\s+-\\s+(.+)$").find(base.trim())
         val title = if (prefix != null && normalize(prefix.groupValues[1]).replace(" ", "") == normalize(song.artists).replace(" ", ""))
-            prefix.groupValues[2].trim() else song.name.trim()
+            prefix.groupValues[2].trim() else base.trim()
         var album = song.album.trim()
         if (album.length > 48) album = album.replace(Regex("\\s*※.*$"), "")
             .replace(Regex("\\s*(歌|歌唱|アーティスト|Artist)\\s*[:：]?\\s*.+$", RegexOption.IGNORE_CASE), "").trim().take(48).trim()

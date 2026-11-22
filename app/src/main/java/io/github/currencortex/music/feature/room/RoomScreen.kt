@@ -99,7 +99,7 @@ import top.yukonga.miuix.kmp.basic.*
                 }
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SettingsInfoHeader("CurrentMusic 房间", io.github.currencortex.music.ui.component.MusicIcons.Room,
+                        SettingsInfoHeader("Prom 房间", io.github.currencortex.music.ui.component.MusicIcons.Room,
                             horizontalInset = 0.dp)
                         MusicCategoryTabs(listOf("public" to "公开房间", "mine" to "我的房间"), browser.scope.query,
                             { vm.load(query, roomScope = if (it == "mine") RoomScope.MINE else RoomScope.PUBLIC) }, "room_scope")
@@ -118,7 +118,7 @@ import top.yukonga.miuix.kmp.basic.*
                         GlassActionButton(if (browser.loading) "刷新中" else "刷新", { vm.load() },
                             enabled = !browser.loading && !busy, fillWidth = false)
                     }
-                    if (account.account == null) SettingsHint("登录 CurrentMusic 账号后可创建房间。")
+                    if (account.account == null) SettingsHint("登录 Prom 账号后可创建房间。")
                 }
                 if (busy) item { ListenLoadingLabel("正在处理房间…") }
                 if (browser.loading && browser.rooms.isEmpty()) item { ListenTogetherSkeleton("正在加载房间…", "room_browser_loading", rows = 2) }

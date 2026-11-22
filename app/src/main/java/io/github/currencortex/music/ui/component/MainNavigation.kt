@@ -77,7 +77,7 @@ fun MainSidebar(selected: Int, labels: List<String>, icons: List<ImageVector>, o
             .padding(16.dp).selectableGroup(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("CurrentMusic", fontSize = 24.sp)
+        Text("Prom", fontSize = 24.sp)
         labels.forEachIndexed { index, label ->
             val tint = if (selected == index) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurfaceVariantSummary
             Row(

@@ -134,7 +134,7 @@ internal class CurrentMusicPreviewRenderer(font: Typeface?, private val fontScal
             drawRoundRect(Color.Black.copy(alpha = .12f), Offset(105f, 207f), Size(150f, 150f), CornerRadius(20f))
             art(105f, 200f, 150f, 0, 20f)
             text("今日精选", 180f, 381f, 18f, strong = true, align = AndroidPaint.Align.CENTER)
-            text("CurrentMusic · 每日推荐", 180f, 402f, 12f, muted, align = AndroidPaint.Align.CENTER)
+            text("Prom · 每日推荐", 180f, 402f, 12f, muted, align = AndroidPaint.Align.CENTER)
             panel(20f, 424f, 320f, 64f)
             text("私人漫游", 36f, 450f, 16f)
             text("按你的喜好，连续听点好音乐", 36f, 470f, 12f, muted, maxWidth = 235f)
@@ -183,7 +183,7 @@ internal class CurrentMusicPreviewRenderer(font: Typeface?, private val fontScal
             withTransform({ translate(0f, 8f) }) {
             panel(16f, 88f, 328f, 240f, radius = 20f)
             avatar(64f, 136f, 32f)
-            text("CurrentMusic", 112f, 128f, 21f, strong = true, maxWidth = 212f)
+            text("Prom", 112f, 128f, 21f, strong = true, maxWidth = 212f)
             text("让喜欢的音乐一直陪伴", 112f, 153f, 13f, muted, maxWidth = 212f)
             drawLine(ink.copy(alpha = .08f), Offset(32f, 184f), Offset(328f, 184f))
             listOf("点赞", "收藏", "歌单").forEachIndexed { i, title ->
@@ -250,7 +250,7 @@ internal class CurrentMusicPreviewRenderer(font: Typeface?, private val fontScal
             val cover = Path().apply { addOval(Rect(left + 10, top + 10, left + 52, top + 52)) }
             clipPath(cover) { art(left + 10, top + 10, 42f, 0, 21f) }
             text("今日精选", left + 64, top + 28, 14f, maxWidth = 122f)
-            text("CurrentMusic", left + 64, top + 45, 11f, muted, maxWidth = 122f)
+            text("Prom", left + 64, top + 45, 11f, muted, maxWidth = 122f)
             drawCircle(ink.copy(alpha = .3f), 12f, Offset(right - 72, top + 31), style = Stroke(1.5f))
             play(right - 75, top + 24, 14f)
             icon("list", right - 43, top + 19, 24f, ink)

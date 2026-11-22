@@ -58,7 +58,7 @@ class ProjectBindingSync(
             throw cancelled
         } catch (_: Exception) {
             if (current()) state.value = ProjectBindingSyncState(error =
-                "本机登录已保留，绑定尚未同步。请确认 CurrentMusic 服务器使用 HTTPS 后重试。")
+                "本机登录已保留，绑定尚未同步。请确认 Prom 服务器使用 HTTPS 后重试。")
         }
     }
 }

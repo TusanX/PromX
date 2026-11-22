@@ -26,12 +26,8 @@ class CurrentMusicLyricsProvider(private val music: MusicRepository, private val
     private val now: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {}) : LyricsProvider {
     override suspend fun findLyrics(song: Song): LyricsProviderResult {
-        if (song.musicSource == MusicSource.QQ_MUSIC) return when (val result = music.lyricsDocument(song)) {
-            is AppResult.Success -> LyricsProviderResult.Parsed(result.value)
-            is AppResult.Failure -> LyricsProviderResult.Failure(LyricsErrorCode.NETWORK_ERROR, result.message)
-        }
         val id = if (song.privateLibrary) song.id else LyricsMatcher.candidates(song).firstOrNull { it.source == MusicSource.NETEASE }?.songId?.toLongOrNull()
-            ?: return LyricsProviderResult.Failure(LyricsErrorCode.NO_LYRICS, "CurrentMusic requires an NCM id")
+            ?: return LyricsProviderResult.Failure(LyricsErrorCode.NO_LYRICS, "Prom requires an NCM id")
         val targetServer = server()
         val projectCache = !song.privateLibrary && source == LyricsSource.CURRENT_MUSIC
         val scope = when {
@@ -46,7 +42,7 @@ class CurrentMusicLyricsProvider(private val music: MusicRepository, private val
             val entry = if (projectCache) CurrentMusicLyricsCache(result.value, now()) else null
             val payload = if (entry != null) ApiJson.encodeToString(entry) else ApiJson.encodeToString(result.value)
             try { cache.cacheLyrics(CachedLyrics(id, payload, scope)) }
-            catch (e: java.io.IOException) { log("CurrentMusic cache write: ${e.javaClass.simpleName}") }
+            catch (e: java.io.IOException) { log("Prom cache write: ${e.javaClass.simpleName}") }
             return LyricsProviderResult.Parsed(result.value, entry?.expiresAtMillis)
         }
         try {
@@ -63,11 +59,11 @@ class CurrentMusicLyricsProvider(private val music: MusicRepository, private val
                 val saved = if (json is JsonArray) LyricsParser.parse(json) else ApiJson.decodeFromString<LyricsDocument>(payload)
                 val cleaned = saved.withoutEstimatedTiming()
                 if (cleaned != saved) try { cache.cacheLyrics(CachedLyrics(id, ApiJson.encodeToString(cleaned), scope)) }
-                catch (e: java.io.IOException) { log("CurrentMusic cache migration: ${e.javaClass.simpleName}") }
+                catch (e: java.io.IOException) { log("Prom cache migration: ${e.javaClass.simpleName}") }
                 if (cleaned.lines.isNotEmpty()) return LyricsProviderResult.Parsed(cleaned)
             }
-        } catch (e: SerializationException) { log("CurrentMusic cache parse: ${e.javaClass.simpleName}") }
+        } catch (e: SerializationException) { log("Prom cache parse: ${e.javaClass.simpleName}") }
         return if (result is AppResult.Failure) LyricsProviderResult.Failure(LyricsErrorCode.NETWORK_ERROR, result.kind.message)
-        else LyricsProviderResult.Failure(LyricsErrorCode.NO_LYRICS, "CurrentMusic returned no lyrics")
+        else LyricsProviderResult.Failure(LyricsErrorCode.NO_LYRICS, "Prom returned no lyrics")
     }
 }

@@ -25,7 +25,7 @@ import kotlin.coroutines.resumeWithException
 import kotlin.math.abs
 
 enum class LyricsMatchSource(val label: String, val shortLabel: String) {
-    NETEASE("网易云音乐", "网易云"), CURRENT_MUSIC("CurrentMusic 歌词", "CurrentMusic"),
+    NETEASE("网易云音乐", "网易云"), CURRENT_MUSIC("Prom 歌词", "Prom"),
     QQ_MUSIC("QQ 音乐", "QQ 音乐"), QISHUI("汽水音乐", "汽水"),
     AMLL("AMLL 逐字歌词", "AMLL"), KUGOU("酷狗音乐", "酷狗")
 }
@@ -77,7 +77,7 @@ class OnlineLyricsMatcher(
                     .map { LyricsCandidate(source, it.id.toString(), it.name, it.artists, it.album,
                         it.durationMs, it.id.toString(), it.cover) }.toList()
                 LyricsMatchSource.CURRENT_MUSIC -> (searchCurrentMusic
-                    ?: throw LyricsMatchException("CurrentMusic 歌词搜索尚未配置"))(text).asSequence()
+                    ?: throw LyricsMatchException("Prom 歌词搜索尚未配置"))(text).asSequence()
                     .filter { it.id > 0 && !it.video && it.name.isNotBlank() }.take(MAX_RESULTS)
                     .map { LyricsCandidate(source, it.id.toString(), it.name, it.artists, it.album,
                         it.durationMs, it.id.toString(), it.cover) }.toList()
@@ -99,8 +99,8 @@ class OnlineLyricsMatcher(
                 loadNetease(id)
             }
             LyricsMatchSource.CURRENT_MUSIC -> {
-                val id = candidate.id.toLongOrNull()?.takeIf { it > 0 } ?: throw LyricsMatchException("CurrentMusic 歌曲编号无效")
-                (loadCurrentMusic ?: throw LyricsMatchException("CurrentMusic 歌词读取尚未配置"))(id)
+                val id = candidate.id.toLongOrNull()?.takeIf { it > 0 } ?: throw LyricsMatchException("Prom 歌曲编号无效")
+                (loadCurrentMusic ?: throw LyricsMatchException("Prom 歌词读取尚未配置"))(id)
             }
             LyricsMatchSource.QQ_MUSIC, LyricsMatchSource.QISHUI -> (additionalSources[candidate.source]
                 ?: throw LyricsMatchException("${candidate.source.label}歌词匹配尚未配置")).load(candidate)
@@ -318,7 +318,7 @@ class OnlineLyricsMatcher(
 
     private suspend fun request(url: HttpUrl, provider: String, module: String? = null): JsonObject = suspendCancellableCoroutine { continuation ->
         val builder = Request.Builder().url(url).header("Accept", "application/json")
-            .header("User-Agent", if (module != null) "Android14-1070-11070-201-0-$module-wifi" else "CurrentMusicX/1.2 (bileizhen/CurrentMusicX)")
+            .header("User-Agent", if (module != null) "Android14-1070-11070-201-0-$module-wifi" else "PromX/1.2 (bileizhen/PromX)")
         if (module != null) builder.header("KG-Rec", "1").header("KG-RC", "1").header("KG-CLIENTTIMEMS", System.currentTimeMillis().toString())
         val call = client.newCall(builder.build())
         continuation.invokeOnCancellation { call.cancel() }

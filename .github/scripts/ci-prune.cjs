@@ -2,7 +2,7 @@
 
 // GitHub Release retention policy: retain one newest, successfully published CI APK.
 // Stable releases, drafts, and unrelated prereleases must never be touched.
-const REPO = 'bileizhen/CurrentMusicX';
+const REPO = 'TusanX/PromX';
 const CI_TAG = /^v\d+\.\d+\.\d+-ci\.([1-9]\d*)$/;
 
 function parsePublishedCi(release) {
@@ -82,7 +82,7 @@ async function prune({github,context,core}) {
       if (error.status!==404) errors.push(old.tag+': tag deletion failed (HTTP '+(error.status||'unknown')+')');
     }
   }
-  await core.summary.addHeading('CurrentMusicX CI Release 保留策略')
+  await core.summary.addHeading('PromX CI Release 保留策略')
     .addRaw('保留：'+plan.keep.tag+'；清理的旧 CI Release：'+plan.remove.length+
       '；保留 '+plan.skipped+' 个不匹配 CI 模式的 Release（正式版、草稿或其他预发布）。')
     .write();

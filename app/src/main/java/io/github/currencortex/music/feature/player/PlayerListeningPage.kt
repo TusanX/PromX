@@ -28,7 +28,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     onBinding: () -> Unit, onDialogActive: (Boolean) -> Unit, onListening: () -> Unit = {}) {
     val account by container.accountRepository.state.collectAsStateWithLifecycle()
     val netease by container.neteaseSessions.state.collectAsStateWithLifecycle()
-    val today by container.todayListening.today.collectAsStateWithLifecycle()
+    // 按当前模式显示今日收听
+    val mode by container.musicSettings.state.collectAsStateWithLifecycle()
+    val today by remember(mode.primarySource) {
+        container.todayListening.today
+    }.collectAsStateWithLifecycle()
     val user = account.account?.let { ProfileUser(id = it.id, username = it.username, nickname = it.nickname,
         avatar = it.avatar, isAdmin = it.isAdmin, isSuper = it.isSuper, title = it.title) }
         ?: netease.profile?.takeIf { netease.loggedIn }?.let { ProfileUser(nickname = it.nickname, avatar = it.avatar) }

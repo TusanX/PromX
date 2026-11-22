@@ -95,7 +95,7 @@ import io.github.currencortex.music.data.auth.RegistrationInput
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     // The mode switch lives in the header so it stays visible without scrolling.
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (register) "注册 CurrentMusic" else "登录 CurrentMusic", Modifier.weight(1f),
+                        Text(if (register) "注册 Prom" else "登录 Prom", Modifier.weight(1f),
                             fontSize = 20.sp, fontWeight = FontWeight.Medium)
                         GlassActionButton(if (register) "返回登录" else "注册", {
                             register = !register; password = ""; code = ""; contact = ""; revealPassword = false
@@ -193,7 +193,7 @@ import io.github.currencortex.music.data.auth.RegistrationInput
     }
     }
     SettingsUiScope {
-        if (showTitle) MusicSubpage("CurrentMusic 账号", "login_page", onBack, content = form)
+        if (showTitle) MusicSubpage("Prom 账号", "login_page", onBack, content = form)
         else form(contentTopInset + 16.dp)
     }
     if (recovering) PasswordDialog(true, state.loading, resetDeadline,

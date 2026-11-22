@@ -65,7 +65,7 @@ private object QqAvatarCache {
                     connection.connectTimeout = 5000
                     connection.readTimeout = 5000
                     connection.setRequestProperty("User-Agent",
-                        "CurrentMusic avatar/1.0")
+                        "Prom avatar/1.0")
                     try {
                         BitmapFactory.decodeStream(connection.inputStream)?.also { cache.put(key, it) }
                     } finally {

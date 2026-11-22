@@ -34,7 +34,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.currencortex.music.data.song.MusicSource
 import io.github.currencortex.music.data.song.SearchLyricContext
 import io.github.currencortex.music.data.song.Song
 import io.github.currencortex.music.feature.library.LibraryViewModel
@@ -146,7 +145,9 @@ internal fun lyricMatchWindow(text: String, query: String, limit: Int = 24): Str
                 // the lyric block sits below at full column width, independent of the buttons.
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        SearchSongTitles(song, query, active)
+                        Text(searchMatchText(song.name, query, colors.primary), fontSize = 16.sp, fontWeight = FontWeight.Medium,
+                            color = if (active) colors.primary else colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("search_result_title_${song.id}"))
                         subtitleBlock()
                     }
                     quickActions?.let { actions ->
@@ -155,7 +156,9 @@ internal fun lyricMatchWindow(text: String, query: String, limit: Int = 24): Str
                 }
                 lyricBlock()
             } else {
-                SearchSongTitles(song, query, active)
+                Text(searchMatchText(song.name, query, colors.primary), fontSize = 16.sp, fontWeight = FontWeight.Medium,
+                    color = if (active) colors.primary else colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("search_result_title_${song.id}"))
                 subtitleBlock()
                 lyricBlock()
             }
@@ -170,52 +173,26 @@ internal fun lyricMatchWindow(text: String, query: String, limit: Int = 24): Str
     localMenu?.let { SongActionsSheet(it) { localMenu = null } }
 }
 
-/** Show the translated title when it explains a Chinese hit; retain the original for identification. */
-@Composable private fun SearchSongTitles(song: Song, query: String, active: Boolean) {
-    val colors = MiuixTheme.colorScheme
-    val word = query.trim()
-    val translated = song.alternateNames.firstOrNull { name ->
-        word.isNotEmpty() && name.contains(word, ignoreCase = true)
-    }
-    Text(searchMatchText(translated ?: song.name, query, colors.primary), fontSize = 16.sp, fontWeight = FontWeight.Medium,
-        color = if (active) colors.primary else colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.testTag("search_result_title_${song.id}"))
-    if (translated != null) Text(song.name, fontSize = 12.sp, color = colors.onSurface.copy(alpha = .55f),
-        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("search_result_original_${song.id}"))
-}
-
 /** Reuses the selected heart destination and the existing playlist picker. */
 @Composable internal fun SearchResultLibraryActions(vm: LibraryViewModel, song: Song, showLike: Boolean = true) {
     val statuses by vm.statuses.collectAsStateWithLifecycle()
     val nativeLikes by vm.container.neteaseSongActions.likedState.collectAsStateWithLifecycle()
-    val qqLikes by vm.container.qqMusic.likedState.collectAsStateWithLifecycle()
-    val qqKnownLikes by vm.container.qqMusic.knownLikeState.collectAsStateWithLifecycle()
-    val qqAccount by vm.container.qqMusic.state.collectAsStateWithLifecycle()
+    val native by vm.container.primaryLibrary.likesUseNetease.collectAsStateWithLifecycle()
     val liking by vm.primaryLikeBusy.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
-    val liked = when {
-        song.musicSource == MusicSource.QQ_MUSIC -> song.id in qqLikes
-        song.musicSource == MusicSource.NETEASE ->
-            io.github.currencortex.music.data.song.NeteaseSongActionsRepository.songId(song) in nativeLikes
-        else -> statuses[song.id]?.liked == true
-    }
+    val liked = if (native) song.id in nativeLikes else statuses[song.id]?.liked == true
     if (showLike) {
-        val qqStateUnknown = song.musicSource == MusicSource.QQ_MUSIC && qqAccount.loggedIn &&
-            song.id !in qqKnownLikes
-        val pending = song.musicSource !in setOf(MusicSource.QQ_MUSIC, MusicSource.NETEASE) &&
-            statuses[song.id]?.pending == true
         SearchResultIconAction(if (liked) Icons.Default.Favorite else MusicIcons.Heart,
             if (liked) "取消喜欢：${song.name}" else "喜欢：${song.name}",
             Modifier.testTag("search_like_${song.id}").semantics { stateDescription = if (liked) "已喜欢" else "未喜欢" },
-            enabled = !liking && !pending, accent = liked, grouped = true) {
-                vm.togglePrimaryLike(song, desiredLiked = true.takeIf { qqStateUnknown })
-            }
+            enabled = !liking && statuses[song.id]?.pending != true, accent = liked, grouped = true) { vm.togglePrimaryLike(song) }
     }
     SearchResultIconAction(playlistAddIcon, "加入歌单：${song.name}", Modifier.testTag("search_playlist_${song.id}"),
         enabled = !busy, grouped = true) { vm.choosePlaylist(song) }
 }
 
-@Composable internal fun SearchResultsToolbar(count: Int, total: Int, onPlayAll: () -> Unit, onQueueAll: () -> Unit) {
+@Composable internal fun SearchResultsToolbar(count: Int, total: Int, onPlayAll: () -> Unit, onQueueAll: () -> Unit,
+    unit: String = "首") {
     val colors = MiuixTheme.colorScheme
     Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f).heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onPlayAll)
@@ -225,10 +202,10 @@ internal fun lyricMatchWindow(text: String, query: String, limit: Int = 24): Str
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("播放全部", fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                Text("已加载 $count 首 · 共 $total 首", fontSize = 10.sp, color = colors.onSurface.copy(alpha = .4f))
+                Text("已加载 $count $unit · 共 $total $unit", fontSize = 10.sp, color = colors.onSurface.copy(alpha = .4f))
             }
         }
-        SearchResultIconAction(MusicIcons.List, "将已加载的 $count 首歌曲加入队列", Modifier.testTag("search_queue_all"), onClick = onQueueAll)
+        SearchResultIconAction(MusicIcons.List, "将已加载的 $count 条内容加入队列", Modifier.testTag("search_queue_all"), onClick = onQueueAll)
     }
 }
 

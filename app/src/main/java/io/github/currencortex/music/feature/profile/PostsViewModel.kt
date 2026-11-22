@@ -63,7 +63,7 @@ class PostsViewModel(val container: AppContainer) : ViewModel() {
     }
     private fun action(success: String, block: suspend () -> Unit, refresh: Boolean = true, after: () -> Unit = {}) {
         if (state.value.busy) return
-        if (session().token == null) { state.update { it.copy(message = "登录 CurrentMusic 账户后可操作") }; return }
+        if (session().token == null) { state.update { it.copy(message = "登录 Prom 账户后可操作") }; return }
         val expected = session()
         state.update { it.copy(busy = true, message = null) }
         actionTask = viewModelScope.launch {

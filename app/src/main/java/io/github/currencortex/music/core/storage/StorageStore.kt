@@ -81,7 +81,7 @@ class StorageStore(private val context: Context, private val audioCache: AudioCa
             MediaStore.Downloads.EXTERNAL_CONTENT_URI,
             arrayOf(MediaStore.MediaColumns.SIZE),
             "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
-            arrayOf("${Environment.DIRECTORY_DOWNLOADS}/CurrentMusic/"),
+            arrayOf("${Environment.DIRECTORY_DOWNLOADS}/Prom/"),
             null,
         )?.use { cursor ->
             val sizeColumn = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
