@@ -106,7 +106,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                     Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(MusicIcons.List, null, Modifier.size(40.dp), tint = MiuixTheme.colorScheme.primary.copy(alpha = .6f))
                         Text("为喜欢的音乐建一个歌单", Modifier.padding(top = 16.dp), fontSize = 17.sp)
-                        // 空态文案跟随当前音源：B站 是收藏夹，QQ 是后续接入，网易云是账号绑定
+                        // 空态文案跟随当前音源。
                         val hint = when (sourceMode) {
                             io.github.currencortex.music.data.song.MusicSource.BILIBILI ->
                                 if (vm.container.biliSession.loggedIn) "去 B站 App 里新建收藏夹，这里会自动出现"

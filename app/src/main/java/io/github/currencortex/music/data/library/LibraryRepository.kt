@@ -145,7 +145,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                 io.github.currencortex.music.core.alt.QqLibrary.likedFolderId(uin, cookie)
             }
             val tracks = withContext(Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.QqLibrary.playlist(tid, cookie)
+                io.github.currencortex.music.core.alt.QqLibrary.playlistDetail(tid, cookie)?.tracks.orEmpty()
             }
             return tracks.map { track ->
                 Song(
@@ -257,10 +257,10 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             val qq = qqSession?.invoke() ?: throw ApiException(ErrorKind.NeteaseBindingRequired,
                 userMessage = "请先在「我的 → QQ 音乐」登录")
             val cookie = qq.cookieHeader()
-            val tracks = withContext(Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.QqLibrary.playlist(id, cookie)
+            val detail = withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.playlistDetail(id, cookie)
             }
-            val songs = tracks.map { track ->
+            val songs = detail?.tracks.orEmpty().map { track ->
                 Song(
                     id = track.mid.hashCode().toLong().let { if (it < 0) -it else it },
                     name = track.name, artists = track.artists, album = track.album,
@@ -269,12 +269,9 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                     externalIds = io.github.currencortex.music.data.song.SongExternalIds(
                         qqMusicId = track.mid, qqMediaId = track.mediaId.takeIf(String::isNotBlank)))
             }
-            val title = withContext(Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.QqLibrary.folders(qq.uin, cookie)
-                    .firstOrNull { it.id == id }?.title
-            } ?: "QQ 歌单"
-            return Playlist(id = id, name = title, description = "", cover = songs.firstOrNull()?.cover.orEmpty(),
-                source = "qq", ownerId = 0L, count = songs.size, songs = songs)
+            return Playlist(id = id, name = detail?.title ?: "QQ 歌单", description = "",
+                cover = detail?.cover.orEmpty().ifBlank { songs.firstOrNull()?.cover.orEmpty() },
+                source = "qq", ownerId = 0L, count = detail?.count ?: songs.size, songs = songs)
         }
         // B站：收藏夹 id 就是列表里的 media_id，内容用 fav/resource/list 拉
         if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
@@ -358,8 +355,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             val target = desired ?: !(statuses.value[song.id]?.liked ?: false)
             return@withLock appResult {
                 val ok = withContext(Dispatchers.IO) {
-                    val dirid = io.github.currencortex.music.core.alt.QqLibrary.likedFolderId(qq.uin, qq.cookieHeader())
-                    io.github.currencortex.music.core.alt.QqLibrary.setLiked(mid, target, qq.cookies, qq.uin, dirid)
+                    io.github.currencortex.music.core.alt.QqLibrary.setLiked(
+                        mid, target, qq.cookies, qq.uin, dirid = 201L)
                 }
                 if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐收藏失败，请确认账号仍有效")
                 statuses.update { current ->

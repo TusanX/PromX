@@ -622,7 +622,15 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                 }
                 entry(NETWORK.toString()) { MusicSettingsScreen(musicSettingsVm, onNavidrome = { navigateLibrary("navidrome") }, onEmby = { navigateLibrary("emby") }) }
                 entry("bili/login") { io.github.currencortex.music.feature.binding.BiliLoginScreen(container, onBack = ::navigateBack) }
-                entry("qq/login") { io.github.currencortex.music.feature.binding.QqLoginScreen(onBack = ::navigateBack) }
+                entry("qq/login") {
+                    io.github.currencortex.music.feature.binding.QqLoginScreen(
+                        onBack = ::navigateBack,
+                        onSessionChanged = {
+                            container.libraryRepository.invalidate()
+                            libraryVm.refresh()
+                        },
+                    )
+                }
                 entry("playback-settings") { io.github.currencortex.music.feature.settings.PlaybackSettingsScreen(musicSettingsVm) }
                 entry("audio-output") { io.github.currencortex.music.feature.settings.AudioOutputScreen(container) }
                 entry("emby") {

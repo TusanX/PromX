@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-@Composable fun QqLoginScreen(onBack: () -> Unit) {
+@Composable fun QqLoginScreen(onBack: () -> Unit, onSessionChanged: () -> Unit = {}) {
     var session by remember { mutableStateOf<QqAuth.QrSession?>(null) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var status by remember { mutableStateOf("等待扫码") }
@@ -81,6 +81,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                     }
                     account = merged
                     status = "已连接 QQ " + merged.uin
+                    onSessionChanged()
                     break
                 }
                 Poll.EXPIRED -> { status = "二维码已失效，请刷新"; break }
@@ -134,6 +135,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                                         val uin = parsed["uin"] ?: parsed["p_uin"]?.removePrefix("o") ?: acc.uin
                                         store.account = acc.copy(uin = uin)
                                         status = "已导入 " + parsed.size + " 项 Cookie，会员曲请重试"
+                                        onSessionChanged()
                                         cookieInput = ""
                                     } else {
                                         status = "没有解析到 Cookie，请检查格式"
@@ -155,7 +157,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f),
                                 modifier = Modifier.testTag("qq_probe_result")) }
                             GlassActionButton("退出 QQ 登录", {
-                                store.clear(); account = null; status = "已退出登录"
+                                store.clear(); account = null; status = "已退出登录"; onSessionChanged()
                             }, modifier = Modifier.fillMaxWidth().testTag("qq_logout"))
                         }
                     }
