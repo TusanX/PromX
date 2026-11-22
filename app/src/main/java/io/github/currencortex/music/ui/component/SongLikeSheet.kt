@@ -23,10 +23,20 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable fun SongLikeSheet(selection: SongLikeSelection, toggle: (LikeDestination) -> Unit, dismiss: () -> Unit) {
+    val song = selection.song
+    val currentTitle = when (song?.musicSource) {
+        MusicSource.QQ_MUSIC -> "QQ 音乐 · 我喜欢"
+        MusicSource.BILIBILI -> "哔哩哔哩 · 我喜欢"
+        else -> "Prom · 我喜欢的音乐"
+    }
+    val canCollectToNetease = song?.musicSource == MusicSource.NETEASE ||
+        !song?.externalIds?.neteaseId.isNullOrBlank()
     MusicDialog("收录到哪个「我喜欢」？", dismiss, edgeToEdgeContent = true, footer = { MusicDialogButton("关闭", onClick = dismiss) }) {
         Column(Modifier.testTag("song_like_sheet")) {
-            LikeRow("Prom · 我喜欢的音乐", selection.currentMusic, LikeDestination.CURRENT_MUSIC, toggle)
-            LikeRow("网易云音乐 APP · 我喜欢的音乐", selection.netease, LikeDestination.NETEASE, toggle)
+            LikeRow(currentTitle, selection.currentMusic, LikeDestination.CURRENT_MUSIC, toggle)
+            if (canCollectToNetease) {
+                LikeRow("网易云音乐 APP · 我喜欢的音乐", selection.netease, LikeDestination.NETEASE, toggle)
+            }
         }
     }
 }

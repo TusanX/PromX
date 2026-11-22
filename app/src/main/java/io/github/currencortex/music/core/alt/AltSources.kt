@@ -129,8 +129,10 @@ object AltSources {
 
     /** QQ音乐：vkey 拼直链。播放器统一补 Referer。 */
     fun qqPlayable(songmid: String, mediaId: String = songmid,
-        cookie: String = "", uin: String = "0"): QqPlayable? = runCatching {
-        playableFromVkey(qqVkey(songmid, mediaId, cookie, uin)) ?: qqPreview(songmid, cookie, uin)
+        cookie: String = "", uin: String = "0",
+        quality: io.github.currencortex.music.core.media.AudioQuality =
+            io.github.currencortex.music.core.media.AudioQuality.AUTO): QqPlayable? = runCatching {
+        playableFromVkey(qqVkey(songmid, mediaId, cookie, uin, quality)) ?: qqPreview(songmid, cookie, uin)
     }.getOrNull()
 
     private fun playableFromVkey(raw: Raw, preview: Boolean = false,
@@ -205,18 +207,33 @@ object AltSources {
      * 一次性请求多个文件档位（m4a / mp3 / flac），取第一个非空。
      */
     fun qqVkey(songmid: String, mediaId: String = songmid,
-        cookie: String = "", uin: String = "0"): Raw {
+        cookie: String = "", uin: String = "0",
+        quality: io.github.currencortex.music.core.media.AudioQuality =
+            io.github.currencortex.music.core.media.AudioQuality.AUTO): Raw {
         require(songmid.matches(Regex("[0-9A-Za-z]{10,20}"))) { "QQ 音乐歌曲 ID 无效" }
         val effectiveMediaId = mediaId.takeIf { it.matches(Regex("[0-9A-Za-z]{10,20}")) } ?: songmid
         val guid = "10000"
         // QQ 的 filename 是「档位 + songmid + media_mid + 扩展名」。漏掉扩展名时接口
         // 仍可能返回 purl，但 CDN 会以 file not exist 404 拒绝，播放器只能看到播放失败。
-        val files = listOf(
-            "C400" to "m4a",
-            "M500" to "mp3",
-            "M800" to "mp3",
-            "F000" to "flac",
-        ).map { (prefix, extension) -> "$prefix$songmid$effectiveMediaId.$extension" }
+        val formats = when (quality) {
+            io.github.currencortex.music.core.media.AudioQuality.STANDARD ->
+                listOf("C400" to "m4a", "M500" to "mp3")
+            io.github.currencortex.music.core.media.AudioQuality.HIGHER ->
+                listOf("M500" to "mp3", "M800" to "mp3")
+            io.github.currencortex.music.core.media.AudioQuality.EXHIGH,
+            io.github.currencortex.music.core.media.AudioQuality.JYEFFECT ->
+                listOf("M800" to "mp3", "F000" to "flac")
+            io.github.currencortex.music.core.media.AudioQuality.LOSSLESS,
+            io.github.currencortex.music.core.media.AudioQuality.HIRES,
+            io.github.currencortex.music.core.media.AudioQuality.JYMASTER,
+            io.github.currencortex.music.core.media.AudioQuality.SKY,
+            io.github.currencortex.music.core.media.AudioQuality.VIVID,
+            io.github.currencortex.music.core.media.AudioQuality.DOLBY ->
+                listOf("F000" to "flac", "M800" to "mp3")
+            io.github.currencortex.music.core.media.AudioQuality.AUTO ->
+                listOf("F000" to "flac", "M800" to "mp3", "M500" to "mp3", "C400" to "m4a")
+        }
+        val files = formats.map { (prefix, extension) -> "$prefix$songmid$effectiveMediaId.$extension" }
         val authst = cookie.split(';')
             .map(String::trim)
             .firstOrNull { it.startsWith("qm_keyst=") || it.startsWith("qqmusic_key=") }
@@ -341,7 +358,8 @@ object QqExtras {
     }
 
     fun comments(songId: Long, latest: Boolean = false, page: Int = 1,
-        pageSize: Int = 20): CommentPage = runCatching {
+        pageSize: Int = 20, cookies: Map<String, String> = emptyMap(),
+        uin: String = "0"): CommentPage = runCatching {
         val data = QqLibrary.musicuData(
             "music.globalComment.CommentRead",
             if (latest) "GetNewCommentList" else "GetHotCommentList",
@@ -360,11 +378,14 @@ object QqExtras {
                     put("WithAirborne", 0)
                 }
             },
+            cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            uin,
         ) ?: return CommentPage(emptyList(), 0, false)
         commentPage(data)
     }.getOrDefault(CommentPage(emptyList(), 0, false))
 
-    fun replies(rootCommentId: String, page: Int = 1, pageSize: Int = 20): CommentPage = runCatching {
+    fun replies(rootCommentId: String, page: Int = 1, pageSize: Int = 20,
+        cookies: Map<String, String> = emptyMap(), uin: String = "0"): CommentPage = runCatching {
         val data = QqLibrary.musicuData(
             "music.globalComment.CommentRead",
             "GetReplyCommentList",
@@ -377,6 +398,8 @@ object QqExtras {
                 put("PicEnable", 1)
                 put("PageNum", (page - 1).coerceAtLeast(0))
             },
+            cookies.entries.joinToString("; ") { "${it.key}=${it.value}" },
+            uin,
         ) ?: return CommentPage(emptyList(), 0, false)
         commentPage(data)
     }.getOrDefault(CommentPage(emptyList(), 0, false))

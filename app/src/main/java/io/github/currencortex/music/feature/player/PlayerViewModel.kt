@@ -152,7 +152,10 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
                     qqSong.externalIds.qqNumericId?.toLongOrNull()?.let { numericId -> launch {
                         val result = appResult {
                             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                io.github.currencortex.music.core.alt.QqExtras.comments(numericId, pageSize = 1)
+                                val qq = container.qqSession.takeIf { it.loggedIn }
+                                io.github.currencortex.music.core.alt.QqExtras.comments(
+                                    numericId, pageSize = 1, cookies = qq?.cookies.orEmpty(),
+                                    uin = qq?.uin.orEmpty().ifBlank { "0" })
                             }
                         }
                         if (result is AppResult.Success) _actions.update { actions ->
@@ -289,10 +292,12 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
             commentOperations.forEach(Job::cancel); commentOperations.clear()
         }
         val epoch = commentsEpoch
-        val previous = _comments.value
+        val original = _comments.value
+        val foreignSource = song.musicSource != io.github.currencortex.music.data.song.MusicSource.NETEASE
+        val previous = if (foreignSource && original.sort == CommentSort.RECOMMENDED)
+            original.copy(sort = CommentSort.HOT) else original
         _comments.value = previous.copy(songId = id, loading = true, error = null, actionError = null,
             replies = if (more) previous.replies else emptyMap(), retryMore = more)
-        val foreignSource = song.musicSource != io.github.currencortex.music.data.song.MusicSource.NETEASE
         commentsJob = viewModelScope.launch {
             if (foreignSource) {
                 // 备用音源：走 SongCommentsRepository 的来源分派（B站按 aid、QQ 按数字 id）

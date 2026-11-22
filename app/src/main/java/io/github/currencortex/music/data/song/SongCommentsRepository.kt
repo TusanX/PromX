@@ -72,8 +72,10 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
                     song.name, song.artists, song.externalIds.qqMusicId)
             }
             ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
         val result = io.github.currencortex.music.core.alt.QqExtras.comments(
-            numeric, latest = sort == CommentSort.LATEST, page = page)
+            numeric, latest = sort == CommentSort.LATEST, page = page,
+            cookies = qq?.cookies.orEmpty(), uin = qq?.uin.orEmpty().ifBlank { "0" })
         val list = result.comments.map { comment ->
             NeteaseComment(0, comment.content, comment.timeSeconds * 1000, comment.likes,
                 NeteaseCommentUser(comment.nick, comment.avatar), emptyList(), comment.id,
@@ -88,8 +90,10 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
             return SongCommentsPage(emptyList(), 0, false, null, 0)
         }
         val page = cursor?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
         val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            io.github.currencortex.music.core.alt.QqExtras.replies(commentId, page)
+            io.github.currencortex.music.core.alt.QqExtras.replies(
+                commentId, page, cookies = qq?.cookies.orEmpty(), uin = qq?.uin.orEmpty().ifBlank { "0" })
         }
         val list = result.comments.map { comment ->
             NeteaseComment(0, comment.content, comment.timeSeconds * 1000, comment.likes,

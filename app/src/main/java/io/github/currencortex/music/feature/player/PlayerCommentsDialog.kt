@@ -93,7 +93,9 @@ import kotlinx.coroutines.flow.drop
                 }
             }
             if (state.enhanced != false) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                CommentSort.entries.forEach { choice ->
+                val choices = if (state.enhanced == true)
+                    listOf(CommentSort.HOT, CommentSort.LATEST) else CommentSort.entries
+                choices.forEach { choice ->
                     CommentTab(choice.label, state.sort == choice, "comments_${choice.value}") {
                         if (!composer.sending && state.busy.isEmpty()) sort(choice)
                     }
@@ -253,7 +255,7 @@ import kotlinx.coroutines.flow.drop
             }
             if (overflow || expanded) CommentAction(if (expanded) "收起" else "展开全文", "expand_comment_${comment.id}") { expanded = !expanded }
             comment.beReplied.firstOrNull()?.let { quote ->
-                Text("${quote.user?.nickname?.ifBlank { "网易云用户" } ?: "网易云用户"}：${quote.content ?: "原评论已删除"}",
+                Text("${quote.user?.nickname?.ifBlank { "用户" } ?: "用户"}：${quote.content ?: "原评论已删除"}",
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.onSurface.copy(alpha = .055f)).padding(12.dp),
                     fontSize = 12.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, color = colors.onSurfaceVariantSummary)
             }

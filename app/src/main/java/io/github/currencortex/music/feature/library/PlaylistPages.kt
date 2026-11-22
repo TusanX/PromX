@@ -78,7 +78,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
         home.playlists.filter { category.includes(it, account.account?.id ?: 0) }
     }
     MusicSubpage("我的歌单", "playlist_index_page", onBack, actions = {
-        if (account.account != null || (nativeAccount.loggedIn && !nativeAccount.stale))
+        if (account.account != null || (nativeAccount.loggedIn && !nativeAccount.stale) ||
+            (sourceMode == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC && vm.container.qqSession.loggedIn))
             GlassIconButton(onCreate, "新建歌单", Modifier.testTag("create_playlist")) { Icon(Icons.Default.Add, null) }
     }) { topInset ->
     MusicPullToRefresh(home.loading, vm::refresh, Modifier.fillMaxSize(), showIndicator = false) {
@@ -105,7 +106,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(MusicIcons.List, null, Modifier.size(40.dp), tint = MiuixTheme.colorScheme.primary.copy(alpha = .6f))
-                        Text("为喜欢的音乐建一个歌单", Modifier.padding(top = 16.dp), fontSize = 17.sp)
+                        Text(if (sourceMode in setOf(io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
+                            io.github.currencortex.music.data.song.MusicSource.BILIBILI)) "还没有歌单"
+                        else "为喜欢的音乐建一个歌单", Modifier.padding(top = 16.dp), fontSize = 17.sp)
                         // 空态文案跟随当前音源。
                         val hint = when (sourceMode) {
                             io.github.currencortex.music.data.song.MusicSource.BILIBILI ->
@@ -287,7 +290,7 @@ internal data class LocalMusicPlaylistActions(val allowed: Boolean, val rescan: 
         localMusic != null -> "本地曲库 · ${state.songs.size} 首歌曲"
         state.playlist?.source == "ncm" -> "网易云音乐 · 同步歌单只读"
         state.playlist?.source == "netease" -> "网易云音乐"
-        state.playlist?.source == "qq" -> "QQ 音乐 · 同步歌单只读"
+        state.playlist?.source == "qq" -> if (state.playlist.writable) "QQ 音乐 · 我的歌单" else "QQ 音乐 · 同步歌单"
         state.playlist?.source == "bilibili" -> "哔哩哔哩 · 收藏夹只读"
         editable -> account.account?.nickname.orEmpty().ifBlank { "我的歌单" }
         vm.route == "lib/likes" -> "Prom · 我喜欢"

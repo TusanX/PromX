@@ -161,7 +161,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                 io.github.currencortex.music.core.alt.QqLibrary.likedFolderId(uin, cookie)
             }
             val tracks = withContext(Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.QqLibrary.playlistDetail(tid, cookie)?.tracks.orEmpty()
+                io.github.currencortex.music.core.alt.QqLibrary.playlistDetail(tid, cookie, uin)?.tracks.orEmpty()
             }
             return tracks.map(::qqSong)
         }
@@ -216,7 +216,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             }
             return folders.map { folder ->
                 Playlist(id = folder.id, name = folder.title, description = "", cover = folder.cover,
-                    source = "qq", ownerId = 0L, count = folder.count, songs = emptyList())
+                    source = "qq", ownerId = 0L, count = folder.count, songs = emptyList(),
+                    writable = folder.writable)
             }
         }
         if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
@@ -262,12 +263,16 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                 userMessage = "请先在「我的 → QQ 音乐」登录")
             val cookie = qq.cookieHeader()
             val detail = withContext(Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.QqLibrary.playlistDetail(id, cookie)
+                io.github.currencortex.music.core.alt.QqLibrary.playlistDetail(id, cookie, qq.uin)
             }
             val songs = detail?.tracks.orEmpty().map(::qqSong)
             return Playlist(id = id, name = detail?.title ?: "QQ 歌单", description = "",
                 cover = detail?.cover.orEmpty().ifBlank { songs.firstOrNull()?.cover.orEmpty() },
-                source = "qq", ownerId = 0L, count = detail?.count ?: songs.size, songs = songs)
+                source = "qq", ownerId = 0L, count = detail?.count ?: songs.size, songs = songs,
+                writable = withContext(Dispatchers.IO) {
+                    io.github.currencortex.music.core.alt.QqLibrary.ownedFolder(
+                        id, cookie, qq.uin) != null
+                })
         }
         // B站：收藏夹 id 就是列表里的 media_id，内容用 fav/resource/list 拉
         if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
@@ -304,7 +309,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             val likedMids = runCatching {
                 withContext(Dispatchers.IO) {
                     val folder = io.github.currencortex.music.core.alt.QqLibrary.likedFolderId(qq.uin, qq.cookieHeader())
-                    io.github.currencortex.music.core.alt.QqLibrary.playlist(folder, qq.cookieHeader()).map { it.mid }.toSet()
+                    io.github.currencortex.music.core.alt.QqLibrary.playlist(
+                        folder, qq.cookieHeader(), qq.uin).map { it.mid }.toSet()
                 }
             }.getOrNull() ?: return
             // Search/library song ids are stable hashes of the QQ mid.
@@ -449,6 +455,16 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
     }
     suspend fun create(name: String, description: String) {
         require(name.trim().isNotEmpty())
+        if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+            val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: throw ApiException(ErrorKind.Unauthorized)
+            val ok = withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.createPlaylist(
+                    name, qq.cookieHeader(), qq.uin)
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐歌单创建失败")
+            revision.update { it + 1 }
+            return
+        }
         val expected = session()
         api.request("POST", "playlists", body = buildJsonObject { put("name", name.trim()); put("description", description) }, authenticated = true, expectedSession = expected)
         revision.update { it + 1 }
@@ -457,19 +473,63 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
         if (expected != session() || !playlist(id, fresh = true).editable(accountId()) || expected != session()) throw ApiException(ErrorKind.Forbidden)
     }
     suspend fun rename(id: Long, name: String) {
-        require(name.trim().isNotEmpty()); val expected = session(); editable(id, expected)
+        require(name.trim().isNotEmpty())
+        if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+            val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: throw ApiException(ErrorKind.Unauthorized)
+            val ok = withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.renamePlaylist(
+                    id, name, qq.cookieHeader(), qq.uin)
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐歌单重命名失败")
+            revision.update { it + 1 }
+            return
+        }
+        val expected = session(); editable(id, expected)
         api.request("PUT", "playlists/$id", body = buildJsonObject { put("name", name.trim()) }, authenticated = true, expectedSession = expected)
         revision.update { it + 1 }
     }
     suspend fun delete(id: Long) {
+        if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+            val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: throw ApiException(ErrorKind.Unauthorized)
+            val ok = withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.deletePlaylist(
+                    id, qq.cookieHeader(), qq.uin)
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐歌单删除失败")
+            revision.update { it + 1 }
+            return
+        }
         val expected = session(); editable(id, expected); api.request("DELETE", "playlists/$id", authenticated = true, expectedSession = expected); revision.update { it + 1 }
     }
     suspend fun add(id: Long, songs: List<Song>) {
+        if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+            val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: throw ApiException(ErrorKind.Unauthorized)
+            val ids = songs.mapNotNull { it.externalIds.qqNumericId?.toLongOrNull() }
+            if (ids.size != songs.size || ids.isEmpty()) throw ApiException(ErrorKind.NotFound)
+            val ok = withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.editPlaylistTracks(
+                    id, ids, add = true, qq.cookieHeader(), qq.uin)
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "加入 QQ 音乐歌单失败")
+            revision.update { it + 1 }
+            return
+        }
         val expected = session(); editable(id, expected)
         api.request("POST", "playlists/$id/tracks", body = buildJsonObject { put("songs", JsonArray(songs.map(::metadata))) }, authenticated = true, expectedSession = expected)
         revision.update { it + 1 }
     }
     suspend fun remove(id: Long, song: Song) {
+        if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+            val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: throw ApiException(ErrorKind.Unauthorized)
+            val songId = song.externalIds.qqNumericId?.toLongOrNull() ?: throw ApiException(ErrorKind.NotFound)
+            val ok = withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.editPlaylistTracks(
+                    id, listOf(songId), add = false, qq.cookieHeader(), qq.uin)
+            }
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "从 QQ 音乐歌单移出失败")
+            revision.update { it + 1 }
+            return
+        }
         val expected = session(); editable(id, expected)
         api.request("DELETE", "playlists/$id/tracks", body = buildJsonObject { put("songs", JsonArray(listOf(metadata(song)))) }, authenticated = true, expectedSession = expected)
         revision.update { it + 1 }

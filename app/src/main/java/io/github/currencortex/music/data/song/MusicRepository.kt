@@ -78,6 +78,7 @@ class MusicRepository(private val api: ApiClient,
                 mediaId = mediaId,
                 cookie = qqSession?.cookieHeader().orEmpty(),
                 uin = qqSession?.uin.orEmpty().ifBlank { "0" },
+                quality = quality,
             )
             // 完整文件不可用时，qqPlayable 已自动回退到 QQ 官方试听片段。
             ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable,

@@ -108,9 +108,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                     SettingsGroup(Modifier.fillMaxWidth().testTag("qq_account_card")) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("已连接 QQ 音乐", fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                            Text("账号 " + acc.uin + " · 会员密钥 " +
-                                if (store.cookies["qm_keyst"] != null || store.cookies["qqmusic_key"] != null) "已获取"
-                                else "未获取（会员曲不可用）", fontSize = 12.sp,
+                            Text("账号 " + acc.uin + " · 账号权限 " +
+                                if (store.cookies["qm_keyst"] != null || store.cookies["qqmusic_key"] != null) "已同步"
+                                else "仅基础访问", fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
                             // 会员曲需要 qm_keyst，扫码登录拿不到；这里支持从浏览器直接粘贴 Cookie
                             var cookieInput by remember { mutableStateOf("") }
@@ -134,7 +134,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                                         store.cookies = store.cookies + parsed
                                         val uin = parsed["uin"] ?: parsed["p_uin"]?.removePrefix("o") ?: acc.uin
                                         store.account = acc.copy(uin = uin)
-                                        status = "已导入 " + parsed.size + " 项 Cookie，会员曲请重试"
+                                        status = "登录信息已更新，可重新播放会员歌曲"
                                         onSessionChanged()
                                         cookieInput = ""
                                     } else {
@@ -142,7 +142,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                                     }
                                 }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("qq_cookie_import"))
                             }
-                            GlassActionButton(if (probing) "探测中…" else "探测接口（诊断）", {
+                            GlassActionButton(if (probing) "正在检查…" else "检查连接与曲库", {
                                 probing = true
                                 kotlinx.coroutines.MainScope().launch {
                                     val info = withContext(Dispatchers.IO) {
@@ -194,7 +194,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                 }
             }
             item {
-                Text("QQ 音乐的大部分歌曲需要会员权限；登录后 PromX 会使用你的账号权限解析播放地址。",
+                Text("会员歌曲优先播放完整版；没有会员权限时，使用 QQ 音乐提供的官方试听。",
                     fontSize = 12.sp, lineHeight = 19.sp,
                     color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
             }

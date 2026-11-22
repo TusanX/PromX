@@ -141,7 +141,11 @@ class LibraryViewModel(val container: AppContainer) : ViewModel() {
                     }
                     return@launch
                 }
-                val current = if (container.accountRepository.token == null) AppResult.Success(emptyList())
+                val source = container.musicSettings.state.value.primarySource
+                val current = if (container.accountRepository.token == null && source !=
+                    io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC && source !=
+                    io.github.currencortex.music.data.song.MusicSource.BILIBILI)
+                    AppResult.Success(emptyList())
                     else appResult { container.libraryRepository.playlists().filter { it.editable(container.accountRepository.state.value.account?.id ?: 0) } }
                 val native = appResult {
                     if (container.bindingRepository.cachedStatus().bound) container.neteaseLibrary.playlists(fresh = true).filter { it.nativeOwned }

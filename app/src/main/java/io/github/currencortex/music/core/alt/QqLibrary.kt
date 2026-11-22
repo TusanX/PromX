@@ -8,9 +8,12 @@ import kotlinx.serialization.json.*
 object QqLibrary {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36"
+    private const val PLAYLIST_PAGE_SIZE = 500
 
     data class Folder(val id: Long, val title: String, val cover: String, val count: Int,
-        val dirId: Long = 0)
+        val dirId: Long = 0, val dirType: Int = 0) {
+        val writable get() = dirId in 1..199 && dirType == 0
+    }
     data class PlaylistDetail(val id: Long, val title: String, val cover: String, val count: Int, val tracks: List<Track>)
     data class Track(
         val mid: String,
@@ -101,15 +104,12 @@ object QqLibrary {
     /** 诊断：把几个关键接口的返回码/条目数打出来，方便判断账号态是否可用 */
     fun probe(cookies: Map<String, String>, uin: String): String {
         val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        fun report(label: String, url: String, read: (String) -> Int): String = runCatching {
-            val body = get(url, cookie)
-            label + ": " + runCatching { read(body) }.getOrDefault(-1) + " 条"
-        }.getOrElse { label + ": 失败 " + it.javaClass.simpleName }
+        val folders = ownedPlaylists(uin, cookie)
+        val liked = folders.firstOrNull(::isLikedFolder)
+        val likedTracks = liked?.let { playlistDetail(it.id, cookie, uin)?.tracks?.size }
         return listOf(
-            report("我创建的歌单", "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss?hostuin=$uin&sin=0&size=200&format=json") { body ->
-                parse(body)?.get("data")?.jsonObject?.get("disslist")?.jsonArray?.size ?: 0
-            },
-            "我喜欢（歌单 ${likedFolderId(uin, cookie)}）: ${playlistDetail(likedFolderId(uin, cookie), cookie)?.tracks?.size ?: 0} 首",
+            "我的歌单：${folders.count { !isLikedFolder(it) }} 个",
+            "我喜欢：${likedTracks ?: 0} 首",
         ).joinToString("\n")
     }
 
@@ -131,6 +131,7 @@ object QqLibrary {
                 o[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()?.takeIf { it > 0 }
             } ?: return@mapNotNull null
             val dirId = o["dirId"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L
+            val dirType = o["dirType"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             Folder(
                 id = id,
                 title = listOf("dirName", "diss_name", "dissname", "title")
@@ -142,6 +143,7 @@ object QqLibrary {
                     .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.contentOrNull?.toIntOrNull() }
                     ?: 0,
                 dirId = dirId,
+                dirType = dirType,
             )
         }
     }.getOrDefault(emptyList())
@@ -171,6 +173,10 @@ object QqLibrary {
             count = listOf("song_cnt", "songnum", "song_num").firstNotNullOfOrNull { key ->
                 o[key]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
             } ?: 0,
+            dirId = listOf("dirId", "dirid").firstNotNullOfOrNull { key ->
+                o[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()?.takeIf { it > 0 }
+            } ?: 0L,
+            dirType = o["dirType"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0,
         )
     }
 
@@ -234,6 +240,15 @@ object QqLibrary {
         cookies: Map<String, String>, uin: String): Boolean = runCatching {
         require(songId > 0)
         val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val detail = musicuData(
+            "music.pf_song_detail_svr",
+            "get_song_detail_yqq",
+            buildJsonObject { put("song_type", 0); put("song_mid", mid) },
+            cookie,
+            uin,
+        )?.get("track_info")?.jsonObject ?: return false
+        if (detail["id"]?.jsonPrimitive?.longOrNull != songId ||
+            detail["mid"]?.jsonPrimitive?.contentOrNull != mid) return false
         if (isLiked(mid, cookie, uin) == liked) return true
         val data = musicuData(
             "music.musicasset.PlaylistDetailWrite",
@@ -255,52 +270,165 @@ object QqLibrary {
     }.getOrDefault(false)
 
     /** 当前网页版歌单详情接口。旧 fcg_ucc_getcdinfo_byids_cp 已返回 4000。 */
-    fun playlistDetail(id: Long, cookie: String): PlaylistDetail? = runCatching {
+    fun playlistDetail(id: Long, cookie: String, uin: String = "0"): PlaylistDetail? = runCatching {
         if (id <= 0) return null
-        val data = musicuData(
-            "music.srfDissInfo.aiDissInfo",
-            "uniform_get_Dissinfo",
-            buildJsonObject {
-                put("disstid", id)
-                put("userinfo", 1); put("tag", 1); put("orderlist", 1)
-                put("song_begin", 0); put("song_num", 1000); put("onlysonglist", 0)
-            },
-            cookie,
-        ) ?: return null
-        val info = data["dirinfo"]?.jsonObject
-        val tracks = data["songlist"]?.jsonArray.orEmpty().mapNotNull { el ->
-            val o = el.jsonObject
-            val mid = o["mid"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            val singers = o["singer"]?.jsonArray?.mapNotNull {
-                it.jsonObject["name"]?.jsonPrimitive?.content
-            }?.joinToString(" / ").orEmpty()
-            val album = o["album"]?.jsonObject
-            Track(
-                mid = mid,
-                name = o["name"]?.jsonPrimitive?.content.orEmpty(),
-                artists = singers,
-                album = album?.get("name")?.jsonPrimitive?.content.orEmpty(),
-                cover = "https://y.gtimg.cn/music/photo_new/T002R300x300M000" +
-                    (album?.get("mid")?.jsonPrimitive?.content.orEmpty()) + ".jpg",
-                durationMs = (o["interval"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L) * 1000,
-                mediaId = o["file"]?.jsonObject?.get("media_mid")?.jsonPrimitive?.contentOrNull
-                    ?: o["media_mid"]?.jsonPrimitive?.contentOrNull
-                    ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid,
-                numericId = listOf("id", "songid")
-                    .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.longOrNull },
-            )
+        val tracksByMid = linkedMapOf<String, Track>()
+        var info: JsonObject? = null
+        var expectedCount: Int? = null
+        var begin = 0
+        var requests = 0
+        while (requests < 200) {
+            val data = musicuData(
+                "music.srfDissInfo.aiDissInfo",
+                "uniform_get_Dissinfo",
+                buildJsonObject {
+                    put("disstid", id)
+                    put("userinfo", 1); put("tag", 1); put("orderlist", 1)
+                    put("song_begin", begin); put("song_num", PLAYLIST_PAGE_SIZE)
+                    put("onlysonglist", 0)
+                },
+                cookie,
+                uin,
+            ) ?: if (begin == 0) return null else break
+            requests++
+            if (info == null) {
+                info = data["dirinfo"]?.jsonObject
+                expectedCount = info?.get("songnum")?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                    ?: data["songnum"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            }
+            val page = data["songlist"]?.jsonArray.orEmpty().mapNotNull(::trackOf)
+            val before = tracksByMid.size
+            page.forEach { tracksByMid[it.mid] = it }
+            if (page.isEmpty()) break
+            if (tracksByMid.size == before) break
+            val total = expectedCount
+            if (total != null && tracksByMid.size >= total) break
+            if (total == null && page.size < PLAYLIST_PAGE_SIZE) break
+            begin += page.size
         }
+        val tracks = tracksByMid.values.toList()
         PlaylistDetail(
             id = id,
             title = info?.get("title")?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "QQ 歌单" },
             cover = info?.get("picurl")?.jsonPrimitive?.contentOrNull.orEmpty()
                 .ifBlank { tracks.firstOrNull()?.cover.orEmpty() },
-            count = info?.get("songnum")?.jsonPrimitive?.contentOrNull?.toIntOrNull()
-                ?: tracks.size,
+            count = expectedCount ?: tracks.size,
             tracks = tracks,
         )
     }.getOrNull()
 
-    fun playlist(id: Long, cookie: String): List<Track> =
-        playlistDetail(id, cookie)?.tracks.orEmpty()
+    private fun trackOf(el: JsonElement): Track? {
+        val o = el.jsonObject
+        val mid = o["mid"]?.jsonPrimitive?.content ?: return null
+        val singers = o["singer"]?.jsonArray?.mapNotNull {
+            it.jsonObject["name"]?.jsonPrimitive?.content
+        }?.joinToString(" / ").orEmpty()
+        val album = o["album"]?.jsonObject
+        return Track(
+            mid = mid,
+            name = o["name"]?.jsonPrimitive?.content.orEmpty(),
+            artists = singers,
+            album = album?.get("name")?.jsonPrimitive?.content.orEmpty(),
+            cover = "https://y.gtimg.cn/music/photo_new/T002R300x300M000" +
+                (album?.get("mid")?.jsonPrimitive?.content.orEmpty()) + ".jpg",
+            durationMs = (o["interval"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L) * 1000,
+            mediaId = o["file"]?.jsonObject?.get("media_mid")?.jsonPrimitive?.contentOrNull
+                ?: o["media_mid"]?.jsonPrimitive?.contentOrNull
+                ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid,
+            numericId = listOf("id", "songid")
+                .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.longOrNull },
+        )
+    }
+
+    fun playlist(id: Long, cookie: String, uin: String = "0"): List<Track> =
+        playlistDetail(id, cookie, uin)?.tracks.orEmpty()
+
+    fun ownedFolder(playlistId: Long, cookie: String, uin: String): Folder? =
+        ownedPlaylists(uin, cookie).firstOrNull { it.id == playlistId && it.writable }
+
+    /** 普通自建歌单的加歌/删歌。系统目录（我喜欢等）由独立红心协议处理。 */
+    fun editPlaylistTracks(playlistId: Long, songIds: List<Long>, add: Boolean,
+        cookie: String, uin: String): Boolean = runCatching {
+        val folder = ownedFolder(playlistId, cookie, uin) ?: return false
+        val songInfo = songIds.distinct().filter { it > 0 }.map { id ->
+            buildJsonObject { put("songId", id); put("songType", 0) }
+        }
+        if (songInfo.isEmpty()) return false
+        val data = musicuData(
+            "music.musicasset.PlaylistDetailWrite",
+            if (add) "AddSonglist" else "DelSonglist",
+            buildJsonObject {
+                put("dirId", folder.dirId)
+                put("v_songInfo", JsonArray(songInfo))
+            },
+            cookie,
+            uin,
+        ) ?: return false
+        data["retCode"]?.jsonPrimitive?.intOrNull == 0
+    }.getOrDefault(false)
+
+    fun createPlaylist(name: String, cookie: String, uin: String): Boolean = runCatching {
+        val clean = name.trim()
+        require(clean.isNotEmpty() && clean.codePointCount(0, clean.length) <= 20)
+        val data = musicuData(
+            "music.musicasset.PlaylistBaseWrite",
+            "AddPlaylist",
+            buildJsonObject { put("dirName", clean) },
+            cookie,
+            uin,
+        ) ?: return false
+        val result = data["result"]?.jsonObject ?: return false
+        (result["tid"]?.jsonPrimitive?.longOrNull ?: 0) > 0 &&
+            (result["dirId"]?.jsonPrimitive?.longOrNull ?: 0) in 1..199
+    }.getOrDefault(false)
+
+    fun renamePlaylist(playlistId: Long, name: String, cookie: String, uin: String): Boolean = runCatching {
+        val folder = ownedFolder(playlistId, cookie, uin) ?: return false
+        val clean = name.trim()
+        require(clean.isNotEmpty() && clean.codePointCount(0, clean.length) <= 20)
+        val edit = musicuData(
+            "music.srfDissInfo.aiDissInfo",
+            "uniform_get_Dissinfo",
+            buildJsonObject {
+                put("dirid", folder.dirId)
+                put("optype", 3); put("tag", 1); put("userinfo", 0); put("pic_dpi", 300)
+            },
+            cookie,
+            uin,
+        ) ?: return false
+        val info = edit["dirinfo"]?.jsonObject ?: return false
+        val tags = info["tag"]?.jsonArray?.mapNotNull { item ->
+            item.jsonObject["id"]?.jsonPrimitive?.longOrNull
+        }?.joinToString(",").orEmpty()
+        val data = musicuData(
+            "music.musicasset.PlaylistBaseWrite",
+            "EditPlaylist",
+            buildJsonObject {
+                put("dirId", folder.dirId)
+                put("mask", 95)
+                put("dirNewName", clean)
+                put("dirNewDesc", info["desc"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                put("dirNewPicUrl", info["picurl"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                put("dirNewPicUrl2", "")
+                put("dirNewtaglist", tags)
+                put("dirShow", info["dir_show"]?.jsonPrimitive?.intOrNull ?: 1)
+            },
+            cookie,
+            uin,
+        ) ?: return false
+        data["retCode"]?.jsonPrimitive?.intOrNull == 0
+    }.getOrDefault(false)
+
+    fun deletePlaylist(playlistId: Long, cookie: String, uin: String): Boolean = runCatching {
+        val folder = ownedFolder(playlistId, cookie, uin) ?: return false
+        val data = musicuData(
+            "music.musicasset.PlaylistBaseWrite",
+            "DelPlaylist",
+            buildJsonObject { put("dirId", folder.dirId) },
+            cookie,
+            uin,
+        ) ?: return false
+        data["retCode"]?.jsonPrimitive?.intOrNull == 0 &&
+            ownedFolder(playlistId, cookie, uin) == null
+    }.getOrDefault(false)
 }
