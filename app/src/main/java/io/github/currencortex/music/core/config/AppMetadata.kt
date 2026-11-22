@@ -9,7 +9,7 @@ object AppMetadata {
     const val APP_DESCRIPTION = "原生 Android 音乐客户端"
     const val AUTHOR = "TusanX"
     const val GITHUB_OWNER = "TusanX"
-    const val GITHUB_REPO = "Prom"
+    const val GITHUB_REPO = "PromX"
     const val LICENSE = "GPL-3.0-only"
 
     const val PROJECT_URL = "https://github.com/$GITHUB_OWNER/$GITHUB_REPO"
