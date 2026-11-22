@@ -271,6 +271,24 @@ Only builds with the same signing certificate can upgrade each other. Test signa
       <a href="https://github.com/backrooms-yrc"><img src="https://github.com/backrooms-yrc.png?size=120" width="76" alt="backrooms-yrc"><br><b>backrooms-yrc</b></a><br>
       <sub>CurrentMusic project<br>original upstream</sub>
     </td>
+    <td align="center" width="140">
+      <a href="https://github.com/LinYe2804"><img src="https://github.com/LinYe2804.png?size=120" width="76" alt="LinYe2804"><br><b>LinYe2804</b></a><br>
+      <sub>Upstream contributor</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="140">
+      <a href="https://github.com/KelierAndes"><img src="https://github.com/KelierAndes.png?size=120" width="76" alt="KelierAndes"><br><b>KelierAndes</b></a><br>
+      <sub>Upstream contributor</sub>
+    </td>
+    <td align="center" width="140">
+      <a href="https://github.com/WhiteXero"><img src="https://github.com/WhiteXero.png?size=120" width="76" alt="WhiteXero"><br><b>WhiteXero</b></a><br>
+      <sub>Upstream contributor</sub>
+    </td>
+    <td align="center" width="140">
+      <a href="https://github.com/OopsUnix"><img src="https://github.com/OopsUnix.png?size=120" width="76" alt="OopsUnix"><br><b>OopsUnix</b></a><br>
+      <sub>Upstream contributor</sub>
+    </td>
   </tr>
 </table>
 
