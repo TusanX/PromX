@@ -31,6 +31,10 @@ class QqSessionStore(context: Context) {
 
     val loggedIn get() = uin.isNotBlank() && cookies.isNotEmpty()
 
+    val nativeAuthenticated get() = prefs.getBoolean("native_auth", false)
+
+    val needsNativeLogin get() = loggedIn && !nativeAuthenticated
+
     fun cookieHeader(): String = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
 
     /** 当前登录 uin（会员曲 vkey 必填） */
@@ -45,6 +49,35 @@ class QqSessionStore(context: Context) {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest("$uin\n$musicKey".toByteArray(Charsets.UTF_8))
         return digest.joinToString("") { "%02x".format(it.toInt() and 255) }.take(20)
+    }
+
+    val nativeCredential: QqMusicCredential? get() {
+        if (!nativeAuthenticated) return null
+        val key = cookies["qqmusic_key"] ?: cookies["qm_keyst"].orEmpty()
+        if (uin.isBlank() || key.isBlank()) return null
+        return QqMusicCredential(
+            uin = uin,
+            key = key,
+            loginType = loginType,
+            nickname = account?.nickname.orEmpty(),
+            avatar = account?.avatar.orEmpty(),
+            openId = prefs.getString("openid", "").orEmpty(),
+            refreshToken = prefs.getString("refresh_token", "").orEmpty(),
+            unionId = prefs.getString("unionid", "").orEmpty(),
+            refreshKey = prefs.getString("refresh_key", "").orEmpty(),
+        )
+    }
+
+    fun saveCredential(credential: QqMusicCredential) {
+        cookies = QqNativeAuth.cookiesOf(credential)
+        account = QqAccount(credential.uin, credential.nickname, credential.avatar)
+        prefs.edit()
+            .putBoolean("native_auth", true)
+            .putString("openid", credential.openId)
+            .putString("refresh_token", credential.refreshToken)
+            .putString("unionid", credential.unionId)
+            .putString("refresh_key", credential.refreshKey)
+            .apply()
     }
 
     fun clear() = prefs.edit().clear().apply()

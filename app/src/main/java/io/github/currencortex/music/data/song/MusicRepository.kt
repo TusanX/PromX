@@ -87,7 +87,7 @@ class MusicRepository(private val api: ApiClient,
             // official preview, refresh the same account's key once and request the full file again.
             if (playable?.preview == true && qqSession != null) {
                 val refreshed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    io.github.currencortex.music.core.alt.QqAuth.refreshKeyst(qqSession.cookies, qqSession.uin)
+                    io.github.currencortex.music.core.alt.QqAuth.refreshSession(qqSession)
                 }
                 if (refreshed != qqSession.cookies) {
                     qqSession.cookies = refreshed

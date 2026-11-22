@@ -46,6 +46,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     // 取二维码
     LaunchedEffect(generation) {
         busy = true; status = "正在获取二维码…"
+        session?.close()
         val s = withContext(Dispatchers.IO) { QqAuth.newQr() }
         session = s
         bitmap = s?.let { q ->
@@ -69,15 +70,13 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                 Poll.SCANNED -> status = "已扫码，请在手机上确认"
                 Poll.SUCCESS -> {
                     status = "登录成功，正在保存…"
-                    val merged = withContext(Dispatchers.IO) {
-                        val cookies = io.github.currencortex.music.core.alt.QqAuth.completeLogin(s, r.redirect)
-                        val uin = io.github.currencortex.music.core.alt.QqAuth.resolveUin(cookies)
-                        val withSso = io.github.currencortex.music.core.alt.QqAuth.ssoKeyst(cookies, uin)
-                        val withKey = io.github.currencortex.music.core.alt.QqAuth.exchangeKeyst(withSso, uin)
-                        store.cookies = withKey
-                        val acc = io.github.currencortex.music.core.alt.QqAccount(uin)
-                        store.account = acc
-                        acc
+                    val merged = r.credential?.let { credential ->
+                        store.saveCredential(credential)
+                        store.account
+                    } ?: store.account
+                    if (merged == null) {
+                        status = "QQ 音乐授权保存失败，请重新扫码"
+                        break
                     }
                     account = merged
                     status = "已连接 QQ " + merged.uin
@@ -88,6 +87,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                 Poll.UNKNOWN -> Unit
             }
         }
+    }
+
+    DisposableEffect(session) {
+        val current = session
+        onDispose { current?.close() }
     }
 
     MusicSubpage("QQ 音乐账号", "qq_login_page", onBack, backTag = "qq_login_back") { topInset ->
@@ -109,7 +113,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("已连接 QQ 音乐", fontSize = 17.sp, fontWeight = FontWeight.Medium)
                             Text("账号 " + acc.uin + " · 账号权限 " +
-                                if (store.cookies["qm_keyst"] != null || store.cookies["qqmusic_key"] != null) "已同步"
+                                if (store.needsNativeLogin) "旧版网页登录，请重新扫码升级为 QQ 音乐原生登录"
+                                else if (store.cookies["qm_keyst"] != null || store.cookies["qqmusic_key"] != null) "已同步"
                                 else "仅基础访问", fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
                             // 会员曲需要 qm_keyst，扫码登录拿不到；这里支持从浏览器直接粘贴 Cookie

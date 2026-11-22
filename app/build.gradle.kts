@@ -55,8 +55,8 @@ android {
         }
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
         targetSdk = 36
-        versionCode = 61
-        versionName = "1.6.2"
+        versionCode = 62
+        versionName = "1.6.3"
         versionCode = requireNotNull(versionCode) * 100_000 + ciBuildNumber
         if (ciBuildNumber > 0) versionName = "$versionName-ci.$ciBuildNumber"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -190,6 +190,7 @@ dependencies {
     implementation("org.mozilla:rhino:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+    implementation("org.eclipse.paho:org.eclipse.paho.mqttv5.client:1.2.5")
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
     implementation("io.coil-kt.coil3:coil-gif:3.3.0")

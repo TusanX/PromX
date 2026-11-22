@@ -22,6 +22,11 @@
 -keep class org.mozilla.javascript.** { *; }
 -keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations,AnnotationDefault,Signature,InnerClasses,EnclosingMethod
 
+# Paho MQTT 5 loads WebSocket/TCP network modules through ServiceLoader, and its
+# connection callback/property classes cross that reflective boundary.
+-keep class org.eclipse.paho.mqttv5.** { *; }
+-dontwarn org.eclipse.paho.mqttv5.**
+
 # Rhino 1.8.1 also contains its desktop JVM bytecode compiler. Every application
 # ContextFactory (OriginalMoodCodec, OriginalAiMasterCodec, FoliaLyricsMatchPolicy)
 # sets optimizationLevel=-1 before evaluating safe JS; Context.createCompiler()
