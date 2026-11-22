@@ -71,9 +71,11 @@ class MusicRepository(private val api: ApiClient,
         }
         if (song.musicSource == MusicSource.QQ_MUSIC) {
             val mid = song.externalIds.qqMusicId ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable, userMessage = "QQ音乐缺少歌曲 ID")
+            val mediaId = song.externalIds.qqMediaId?.takeIf(String::isNotBlank) ?: mid
             val qqSession = qqCookie?.invoke()
-            val url = io.github.currencortex.music.core.alt.AltSources.qqPlayable(
+            val playable = io.github.currencortex.music.core.alt.AltSources.qqPlayable(
                 mid,
+                mediaId = mediaId,
                 cookie = qqSession?.cookieHeader().orEmpty(),
                 uin = qqSession?.uin.orEmpty().ifBlank { "0" },
             )
@@ -81,7 +83,8 @@ class MusicRepository(private val api: ApiClient,
             ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable,
                 userMessage = if (qqSession == null) "这首歌需要登录 QQ 音乐后才能播放"
                 else "这首歌需要 QQ 音乐会员（当前账号没有会员或已下架）")
-            return AudioSource(url, "standard", 44100, 2, format = "m4a", source = "qq", validForSeconds = 600)
+            return AudioSource(playable.url, playable.level, 44100, 2, format = playable.format,
+                source = "qq", validForSeconds = 600)
         }
         val access = audioAccess()
         return if (access.provider == AudioProvider.LX) lxSource(song, quality, access) else source(song.id, quality, session, refresh)

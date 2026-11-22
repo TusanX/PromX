@@ -18,6 +18,7 @@ import kotlinx.serialization.SerialName
 @Serializable data class NavidromeTrackRef(val id: String, val identity: String, val format: String = "",
     val sampleRate: Int = 0, val channels: Int = 0)
 @Serializable data class SongExternalIds(val neteaseId: String? = null, val qqMusicId: String? = null,
+    val qqMediaId: String? = null,
     val bilibiliBvid: String? = null, val bilibiliCid: String? = null, val qqNumericId: String? = null,
     val appleMusicId: String? = null, val spotifyId: String? = null)
 @Serializable data class LyricContextDto(val t: Long? = null, val txt: String = "", val matched: Boolean = false)

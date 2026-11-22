@@ -267,6 +267,8 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
                         musicSource = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
                         externalIds = io.github.currencortex.music.data.song.SongExternalIds(
                             qqMusicId = mid,
+                            qqMediaId = o["media_mid"]?.jsonPrimitive?.contentOrNull
+                                ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull,
                             qqNumericId = o["songid"]?.jsonPrimitive?.content))
                 }
             }

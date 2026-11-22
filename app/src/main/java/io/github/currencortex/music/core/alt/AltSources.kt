@@ -8,9 +8,7 @@
 package io.github.currencortex.music.core.alt
 
 import java.net.HttpURLConnection
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.*
 import java.net.URL
 
 /** 一条来自备用音源的搜索结果 */
@@ -21,12 +19,15 @@ data class AltTrack(
     val artist: String,
     val cover: String,
     val extra: String = "",  // B站 cid / QQ albummid
+    val mediaId: String = id, // QQ 的 media_mid；取流文件名必须使用它
 )
 
 enum class AltSource(val label: String) { BILIBILI("哔哩哔哩"), QQ("QQ音乐") }
 
 /** 取流地址的结果：B站与 QQ 都需要 Referer，播放时必须由播放器补头 */
 data class AltStream(val url: String, val referer: String)
+
+data class QqPlayable(val url: String, val format: String, val level: String)
 
 object AltSources {
     private const val UA =
@@ -125,31 +126,75 @@ object AltSources {
     fun bilibiliPlayable(bvid: String, cid: String, cookie: String = ""): String? =
         BiliPlayback.playable(bvid, cid, cookie)
 
-    /** QQ音乐：vkey 拼直链，包成本地代理地址 */
-    fun qqPlayable(songmid: String, cookie: String = "", uin: String = "0"): String? = runCatching {
-        val raw = qqVkey(songmid, cookie, uin)
-        val root = kotlinx.serialization.json.Json.parseToJsonElement(raw.body).jsonObject
+    /** QQ音乐：vkey 拼直链。播放器统一补 Referer。 */
+    fun qqPlayable(songmid: String, mediaId: String = songmid,
+        cookie: String = "", uin: String = "0"): QqPlayable? = runCatching {
+        val raw = qqVkey(songmid, mediaId, cookie, uin)
+        val root = Json.parseToJsonElement(raw.body).jsonObject
         val data = root["req_0"]?.jsonObject?.get("data")?.jsonObject ?: return null
-        val sip = data["sip"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.content ?: return null
+        val sip = data["sip"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?.firstOrNull { it.isNotBlank() && !it.startsWith("http://ws") } ?: return null
         val infos = data["midurlinfo"]?.jsonArray ?: return null
-        val purl = infos.mapNotNull { it.jsonObject["purl"]?.jsonPrimitive?.content }
-            .firstOrNull { it.isNotBlank() } ?: return null
-        // 直连即可（Referer 由 OkHttp 拦截器统一补），不再经过本地代理
-        sip + purl
+        val purl = infos.asSequence().mapNotNull { it.jsonObject["purl"]?.jsonPrimitive?.contentOrNull }
+            .firstOrNull(String::isNotBlank) ?: return null
+        val format = purl.substringBefore('?').substringAfterLast('.', "").lowercase()
+            .ifBlank { "m4a" }
+        val level = when (purl.take(4)) {
+            "F000" -> "lossless"
+            "M800" -> "exhigh"
+            "M500" -> "higher"
+            else -> "standard"
+        }
+        QqPlayable(sip + purl, format, level)
     }.getOrNull()
 
     /**
      * QQ 音乐 vkey：会员曲必须带登录态（uin + Cookie）才可能拿到 purl。
      * 一次性请求多个文件档位（m4a / mp3 / flac），取第一个非空。
      */
-    fun qqVkey(songmid: String, cookie: String = "", uin: String = "0"): Raw {
+    fun qqVkey(songmid: String, mediaId: String = songmid,
+        cookie: String = "", uin: String = "0"): Raw {
+        require(songmid.matches(Regex("[0-9A-Za-z]{10,20}"))) { "QQ 音乐歌曲 ID 无效" }
+        val effectiveMediaId = mediaId.takeIf { it.matches(Regex("[0-9A-Za-z]{10,20}")) } ?: songmid
         val guid = "10000"
-        val files = listOf("C400", "M800", "F000").joinToString(",") { """"$it$songmid$it"""" }
-        // musicu.fcg 的 comm 段要带 uin，否则服务端按未登录处理（会员曲拿不到 purl）
-        val body = """{"comm":{"uin":"$uin","format":"json","ct":24,"cv":4747474,"platform":"yqq.json"},""" +
-            """"req_0":{"module":"vkey.GetVkeyServer","method":"CgiGetVkey","param":{""" +
-            """"guid":"$guid","songmid":["$songmid"],"songtype":[0],"uin":"$uin","loginflag":1,"platform":"20","filename":[$files]}}}"""
-        return postWithCookie("https://u.y.qq.com/cgi-bin/musicu.fcg", "https://y.qq.com/", body, cookie)
+        // QQ 的 filename 是「档位 + songmid + media_mid + 扩展名」。漏掉扩展名时接口
+        // 仍可能返回 purl，但 CDN 会以 file not exist 404 拒绝，播放器只能看到播放失败。
+        val files = listOf(
+            "C400" to "m4a",
+            "M500" to "mp3",
+            "M800" to "mp3",
+            "F000" to "flac",
+        ).map { (prefix, extension) -> "$prefix$songmid$effectiveMediaId.$extension" }
+        val authst = cookie.split(';')
+            .map(String::trim)
+            .firstOrNull { it.startsWith("qm_keyst=") || it.startsWith("qqmusic_key=") }
+            ?.substringAfter('=')
+            .orEmpty()
+        val body = buildJsonObject {
+            putJsonObject("comm") {
+                put("uin", uin)
+                put("format", "json")
+                put("ct", 24)
+                put("cv", 0)
+                if (authst.isNotBlank()) put("authst", authst)
+            }
+            putJsonObject("req_0") {
+                put("module", "vkey.GetVkeyServer")
+                put("method", "CgiGetVkey")
+                putJsonObject("param") {
+                    put("guid", guid)
+                    putJsonArray("songmid") { add(songmid) }
+                    putJsonArray("songtype") { add(0) }
+                    put("uin", uin)
+                    put("loginflag", 1)
+                    put("platform", "20")
+                    putJsonArray("filename") { files.forEach(::add) }
+                }
+            }
+        }.toString()
+        val url = "https://u.y.qq.com/cgi-bin/musicu.fcg?-=getplaysongvkey&g_tk=5381" +
+            "&loginUin=$uin&hostUin=0&format=json&platform=yqq.json&needNewCode=0"
+        return postWithCookie(url, "https://y.qq.com/", body, cookie)
     }
 
     private fun postWithCookie(url: String, referer: String, body: String, cookie: String): Raw {
@@ -317,7 +362,9 @@ object AltRecommend {
                     it.jsonObject["name"]?.jsonPrimitive?.content ?: ""
                 } ?: "",
                 if (album.isNotBlank()) "https://y.qq.com/music/photo_new/T002R300x300M000$album.jpg" else "",
-                extra = o["songid"]?.jsonPrimitive?.content ?: "")
+                extra = o["songid"]?.jsonPrimitive?.content ?: "",
+                mediaId = o["media_mid"]?.jsonPrimitive?.contentOrNull
+                    ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid)
         }
     }.getOrDefault(emptyList())
 

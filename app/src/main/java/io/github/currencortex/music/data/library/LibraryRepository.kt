@@ -51,7 +51,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             Song(id = id, name = t.title, artists = t.artist + " · QQ音乐", cover = t.cover,
                 musicSource = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
                 externalIds = io.github.currencortex.music.data.song.SongExternalIds(
-                    qqMusicId = t.id, qqNumericId = t.extra.ifBlank { null }))
+                    qqMusicId = t.id, qqMediaId = t.mediaId.takeIf(String::isNotBlank),
+                    qqNumericId = t.extra.ifBlank { null }))
         }
     }
 
@@ -155,7 +156,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                     cover = track.cover,
                     durationMs = track.durationMs,
                     musicSource = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
-                    externalIds = io.github.currencortex.music.data.song.SongExternalIds(qqMusicId = track.mid),
+                    externalIds = io.github.currencortex.music.data.song.SongExternalIds(
+                        qqMusicId = track.mid, qqMediaId = track.mediaId.takeIf(String::isNotBlank)),
                 )
             }
         }
@@ -264,7 +266,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                     name = track.name, artists = track.artists, album = track.album,
                     cover = track.cover, durationMs = track.durationMs,
                     musicSource = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
-                    externalIds = io.github.currencortex.music.data.song.SongExternalIds(qqMusicId = track.mid))
+                    externalIds = io.github.currencortex.music.data.song.SongExternalIds(
+                        qqMusicId = track.mid, qqMediaId = track.mediaId.takeIf(String::isNotBlank)))
             }
             val title = withContext(Dispatchers.IO) {
                 io.github.currencortex.music.core.alt.QqLibrary.folders(qq.uin, cookie)

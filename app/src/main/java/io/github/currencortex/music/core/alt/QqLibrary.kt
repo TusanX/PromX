@@ -4,6 +4,7 @@
 package io.github.currencortex.music.core.alt
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -20,6 +21,7 @@ object QqLibrary {
         val album: String,
         val cover: String,
         val durationMs: Long,
+        val mediaId: String = mid,
     )
 
     private fun get(url: String, cookie: String): String {
@@ -130,6 +132,8 @@ object QqLibrary {
                 cover = "https://y.gtimg.cn/music/photo_new/T002R300x300M000" +
                     (album?.get("mid")?.jsonPrimitive?.content.orEmpty()) + ".jpg",
                 durationMs = (o["interval"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L) * 1000,
+                mediaId = o["media_mid"]?.jsonPrimitive?.contentOrNull
+                    ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid,
             )
         }
     }.getOrDefault(emptyList())
