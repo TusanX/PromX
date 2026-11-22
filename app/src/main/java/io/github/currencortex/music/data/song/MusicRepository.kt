@@ -79,12 +79,13 @@ class MusicRepository(private val api: ApiClient,
                 cookie = qqSession?.cookieHeader().orEmpty(),
                 uin = qqSession?.uin.orEmpty().ifBlank { "0" },
             )
-            // 拿不到 vkey 就明确报错：绝不用别家的音源冒充 QQ 原曲
+            // 完整文件不可用时，qqPlayable 已自动回退到 QQ 官方试听片段。
             ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable,
                 userMessage = if (qqSession == null) "这首歌需要登录 QQ 音乐后才能播放"
-                else "这首歌需要 QQ 音乐会员（当前账号没有会员或已下架）")
+                else "这首歌暂时没有可用的 QQ 音乐播放地址（可能已下架，且无官方试听）")
             return AudioSource(playable.url, playable.level, 44100, 2, format = playable.format,
-                source = "qq", validForSeconds = 600)
+                source = if (playable.preview) "qq-preview" else "qq",
+                validForSeconds = playable.validForSeconds, durationMs = playable.durationMs)
         }
         val access = audioAccess()
         return if (access.provider == AudioProvider.LX) lxSource(song, quality, access) else source(song.id, quality, session, refresh)

@@ -11,7 +11,6 @@ import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
@@ -156,25 +155,29 @@ class MainActivity : ComponentActivity() {
             alpha = 0f
             translationY = 18f * resources.displayMetrics.density
         }
-        val launchLift = 24f * resources.displayMetrics.density
-        val identity = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
+        val density = resources.displayMetrics.density
+        // The final video frame keeps the note in the lower part of its square. Anchor the
+        // wordmark from that visible edge so the gap stays consistent on different screens.
+        val titleTop = metrics.heightPixels / 2f + side * .20f + 64f * density
+        val identity = FrameLayout(this).apply {
             visibility = View.VISIBLE
-            translationY = -launchLift
-            // Keep the title below the video's own icon. The transparent spacer prevents a
-            // second icon from ever replacing the final video frame.
-            addView(View(this@MainActivity), LinearLayout.LayoutParams((side * .32f).toInt(), (side * .32f).toInt()))
             addView(
                 wordmark,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    topMargin = (84f * resources.displayMetrics.density).toInt()
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                ).apply {
+                    topMargin = titleTop.toInt()
                 },
             )
         }
         val videoView = TextureView(this).apply { isClickable = false }
         root.addView(videoView, FrameLayout.LayoutParams(side, side, Gravity.CENTER))
-        root.addView(identity, FrameLayout.LayoutParams(side, side, Gravity.CENTER))
+        root.addView(identity, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
         player.setVideoTextureView(videoView)
 
         var videoFinished = false

@@ -9,7 +9,8 @@ object QqLibrary {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36"
 
-    data class Folder(val id: Long, val title: String, val cover: String, val count: Int)
+    data class Folder(val id: Long, val title: String, val cover: String, val count: Int,
+        val dirId: Long = 0)
     data class PlaylistDetail(val id: Long, val title: String, val cover: String, val count: Int, val tracks: List<Track>)
     data class Track(
         val mid: String,
@@ -19,6 +20,7 @@ object QqLibrary {
         val cover: String,
         val durationMs: Long,
         val mediaId: String = mid,
+        val numericId: Long? = null,
     )
 
     private fun get(url: String, cookie: String): String {
@@ -55,6 +57,37 @@ object QqLibrary {
             parse(stream.bufferedReader().use { it.readText() })
         }.getOrNull()
 
+    /** 当前 musicu RPC 的统一入口。成功时返回 req_0.data。 */
+    internal fun musicuData(module: String, method: String, param: JsonObject,
+        cookie: String = "", uin: String = "0"): JsonObject? {
+        val authst = cookie.split(';').map(String::trim)
+            .firstOrNull { it.startsWith("qm_keyst=") || it.startsWith("qqmusic_key=") }
+            ?.substringAfter('=').orEmpty()
+        var gtkHash = 5381L
+        for (char in authst) gtkHash = (gtkHash + (gtkHash shl 5) + char.code) and 0x7fffffff
+        val body = buildJsonObject {
+            putJsonObject("comm") {
+                put("ct", 24)
+                put("cv", 4747474)
+                put("platform", "yqq.json")
+                put("format", "json")
+                put("uin", uin.ifBlank { "0" })
+                put("g_tk", gtkHash)
+                if (authst.isNotBlank()) put("authst", authst)
+            }
+            putJsonObject("req_0") {
+                put("module", module)
+                put("method", method)
+                put("param", param)
+            }
+        }
+        val root = postMusicu(body, cookie) ?: return null
+        if (root["code"]?.jsonPrimitive?.intOrNull?.let { it != 0 } == true) return null
+        val request = root["req_0"]?.jsonObject ?: return null
+        if (request["code"]?.jsonPrimitive?.intOrNull?.let { it != 0 } == true) return null
+        return request["data"]?.jsonObject
+    }
+
     /** 诊断：把几个关键接口的返回码/条目数打出来，方便判断账号态是否可用 */
     fun probe(cookies: Map<String, String>, uin: String): String {
         val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
@@ -70,12 +103,44 @@ object QqLibrary {
         ).joinToString("\n")
     }
 
-    /** 用户创建的歌单（含「我喜欢」以外的自建歌单） */
-    fun folders(uin: String, cookie: String): List<Folder> = runCatching {
-        val body = get("https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss?hostuin=$uin&sin=0&size=200&format=json", cookie)
-        parse(body)?.get("data")?.jsonObject?.get("disslist")?.jsonArray
-            ?.mapNotNull(::folderOf).orEmpty()
-    }.getOrDefault(emptyList()).ifEmpty { profileFolders(uin, cookie) }
+    /** 当前账号自建歌单。GetPlaylistByUin 同时提供 tid 和 dirId，写「我喜欢」时不会再猜目录号。 */
+    fun ownedPlaylists(uin: String, cookie: String): List<Folder> = runCatching {
+        val data = musicuData(
+            "music.musicasset.PlaylistBaseRead",
+            "GetPlaylistByUin",
+            buildJsonObject { put("uin", uin) },
+            cookie,
+            uin,
+        ) ?: return emptyList()
+        data["v_playlist"]?.jsonArray.orEmpty().mapNotNull { el ->
+            val o = el.jsonObject
+            val id = listOf("tid", "dissid", "disstid", "id").firstNotNullOfOrNull { key ->
+                o[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()?.takeIf { it > 0 }
+            } ?: return@mapNotNull null
+            val dirId = o["dirId"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L
+            Folder(
+                id = id,
+                title = listOf("dirName", "diss_name", "dissname", "title")
+                    .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.contentOrNull }
+                    .orEmpty().ifBlank { if (dirId == 201L) "我喜欢" else "歌单 $id" },
+                cover = listOf("dirCover", "diss_cover", "logo", "cover")
+                    .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.contentOrNull }.orEmpty(),
+                count = listOf("songNum", "song_cnt", "songnum", "song_num")
+                    .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.contentOrNull?.toIntOrNull() }
+                    ?: 0,
+                dirId = dirId,
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    /** 用户创建的歌单（优先当前接口，旧接口只保留为兼容回退） */
+    fun folders(uin: String, cookie: String): List<Folder> = ownedPlaylists(uin, cookie).ifEmpty {
+        runCatching {
+            val body = get("https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss?hostuin=$uin&sin=0&size=200&format=json", cookie)
+            parse(body)?.get("data")?.jsonObject?.get("disslist")?.jsonArray
+                ?.mapNotNull(::folderOf).orEmpty()
+        }.getOrDefault(emptyList()).ifEmpty { profileFolders(uin, cookie) }
+    }
 
     private fun folderOf(el: JsonElement): Folder? {
         val o = el.jsonObject
@@ -105,6 +170,7 @@ object QqLibrary {
 
     /** 我喜欢：QQ 的「我喜欢」是特殊歌单，tid 固定为 201（不同账号可能是 dissid） */
     fun likedFolderId(uin: String, cookie: String): Long = runCatching {
+        ownedPlaylists(uin, cookie).firstOrNull { it.dirId == 201L }?.id?.let { return it }
         val body = get("https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss?hostuin=$uin&sin=0&size=200&format=json", cookie)
         val list = parse(body)?.get("data")?.jsonObject?.get("disslist")?.jsonArray ?: return 201L
         list.firstOrNull { el ->
@@ -126,50 +192,63 @@ object QqLibrary {
             ?.takeIf { it > 0 }
     }.getOrNull()
 
-    /** 把一首歌加入/移出「我喜欢」歌单（dirid 201）。需要 g_tk，由 p_skey/skey 计算。 */
-    fun setLiked(mid: String, liked: Boolean, cookies: Map<String, String>, uin: String,
-        dirid: Long = 201L): Boolean = runCatching {
-        val key = cookies["qqmusic_key"] ?: cookies["qm_keyst"]
-            ?: cookies["p_skey"] ?: cookies["skey"] ?: return false
-        var hash = 5381L
-        for (ch in key) hash = (hash * 33 + ch.code) and 0x7fffffff
-        val gtk = hash
-        val add = if (liked) "add" else "del"
-        val body = "midlist=" + java.net.URLEncoder.encode(mid, "UTF-8") +
-            "&dirid=$dirid&addtype=" + add + "&srctype=1&uin=" + uin + "&format=json&g_tk=" + gtk
-        val c = java.net.URL("https://c.y.qq.com/splcloud/fcgi-bin/fcg_music_add2songdir.fcg?g_tk=$gtk&format=json")
-            .openConnection() as java.net.HttpURLConnection
-        c.requestMethod = "POST"; c.doOutput = true
-        c.setRequestProperty("User-Agent", UA)
-        c.setRequestProperty("Referer", "https://y.qq.com/")
-        c.setRequestProperty("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
-        c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-        c.outputStream.use { it.write(body.toByteArray()) }
-        val text = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)!!
-            .bufferedReader().use { it.readText() }
-        text.contains("\"code\":0") || text.contains("\"subcode\":0")
+    /** 批量读取红心状态。该接口只认 songmid，比重读整个「我喜欢」歌单稳定。 */
+    fun likedMids(mids: List<String>, cookie: String, uin: String): Map<String, Boolean> = runCatching {
+        val values = mids.filter { it.matches(Regex("[0-9A-Za-z]{10,20}")) }.distinct()
+        if (values.isEmpty()) return emptyMap()
+        val data = musicuData(
+            "music.musicasset.SongFavRead",
+            "IsSongFanByMid",
+            buildJsonObject { put("v_songMid", buildJsonArray { values.forEach(::add) }) },
+            cookie,
+            uin,
+        ) ?: return emptyMap()
+        data["m_fan"]?.jsonObject.orEmpty().mapNotNull { (mid, value) ->
+            value.jsonPrimitive.booleanOrNull?.let { mid to it }
+        }.toMap()
+    }.getOrDefault(emptyMap())
+
+    fun isLiked(mid: String, cookie: String, uin: String): Boolean? =
+        likedMids(listOf(mid), cookie, uin)[mid]
+
+    /** 当前 musicu 写入协议：数字 songId 写入 dirId=201，再用 songmid 读回确认。 */
+    fun setLiked(songId: Long, mid: String, liked: Boolean,
+        cookies: Map<String, String>, uin: String): Boolean = runCatching {
+        require(songId > 0)
+        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        if (isLiked(mid, cookie, uin) == liked) return true
+        val data = musicuData(
+            "music.musicasset.PlaylistDetailWrite",
+            if (liked) "AddSonglist" else "DelSonglist",
+            buildJsonObject {
+                put("dirId", 201)
+                putJsonArray("v_songInfo") {
+                    addJsonObject {
+                        put("songId", songId)
+                        put("songType", 0)
+                    }
+                }
+            },
+            cookie,
+            uin,
+        ) ?: return false
+        if (data["retCode"]?.jsonPrimitive?.intOrNull?.let { it != 0 } != false) return false
+        isLiked(mid, cookie, uin) == liked
     }.getOrDefault(false)
 
     /** 当前网页版歌单详情接口。旧 fcg_ucc_getcdinfo_byids_cp 已返回 4000。 */
     fun playlistDetail(id: Long, cookie: String): PlaylistDetail? = runCatching {
         if (id <= 0) return null
-        val body = kotlinx.serialization.json.buildJsonObject {
-            put("comm", kotlinx.serialization.json.buildJsonObject {
-                put("ct", 24); put("cv", 0); put("format", "json")
-            })
-            put("req_1", kotlinx.serialization.json.buildJsonObject {
-                put("module", "music.srfDissInfo.aiDissInfo")
-                put("method", "uniform_get_Dissinfo")
-                put("param", kotlinx.serialization.json.buildJsonObject {
-                    put("disstid", id)
-                    put("userinfo", 1); put("tag", 1); put("orderlist", 1)
-                    put("song_begin", 0); put("song_num", 1000); put("onlysonglist", 0)
-                })
-            })
-        }
-        val req = postMusicu(body, cookie)?.get("req_1")?.jsonObject ?: return null
-        if (req["code"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() != 0) return null
-        val data = req["data"]?.jsonObject ?: return null
+        val data = musicuData(
+            "music.srfDissInfo.aiDissInfo",
+            "uniform_get_Dissinfo",
+            buildJsonObject {
+                put("disstid", id)
+                put("userinfo", 1); put("tag", 1); put("orderlist", 1)
+                put("song_begin", 0); put("song_num", 1000); put("onlysonglist", 0)
+            },
+            cookie,
+        ) ?: return null
         val info = data["dirinfo"]?.jsonObject
         val tracks = data["songlist"]?.jsonArray.orEmpty().mapNotNull { el ->
             val o = el.jsonObject
@@ -189,6 +268,8 @@ object QqLibrary {
                 mediaId = o["file"]?.jsonObject?.get("media_mid")?.jsonPrimitive?.contentOrNull
                     ?: o["media_mid"]?.jsonPrimitive?.contentOrNull
                     ?: o["strMediaMid"]?.jsonPrimitive?.contentOrNull ?: mid,
+                numericId = listOf("id", "songid")
+                    .firstNotNullOfOrNull { key -> o[key]?.jsonPrimitive?.longOrNull },
             )
         }
         PlaylistDetail(

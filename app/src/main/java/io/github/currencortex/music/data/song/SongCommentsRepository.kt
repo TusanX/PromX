@@ -64,18 +64,21 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
             return SongCommentsPage(list, list.size.toLong(), false, null, 0)
         }
         if (song.musicSource != MusicSource.QQ_MUSIC) return comments(song.id, sort, page)
-        // 评论接口只认数字 songid：搜不到就先按歌名回查一次，再退到哈希（那基本等于没评论）
+        // 歌单、红心和榜单映射现在会保留数字 songid；旧队列条目才按标题和 songmid 回查。
         val numeric = song.externalIds.qqNumericId?.toLongOrNull()
             ?: kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.QqExtras.resolveSongId(song.name, song.artists)
+                io.github.currencortex.music.core.alt.QqExtras.resolveSongId(
+                    song.name, song.artists, song.externalIds.qqMusicId)
             }
             ?: return SongCommentsPage(emptyList(), 0, false, null, 0)
-        val raw = io.github.currencortex.music.core.alt.QqExtras.comments(numeric, page - 1)
-        val list = raw.mapIndexed { index, (content, nick, likes) ->
-            NeteaseComment(index.toLong(), content, 0, likes, NeteaseCommentUser(nick, ""), emptyList(),
-                "$numeric-$index", 0, false, 0)
+        val result = io.github.currencortex.music.core.alt.QqExtras.comments(
+            numeric, latest = sort == CommentSort.LATEST, page = page)
+        val list = result.comments.map { comment ->
+            NeteaseComment(0, comment.content, comment.timeSeconds * 1000, comment.likes,
+                NeteaseCommentUser(comment.nick, comment.avatar), emptyList(), comment.id,
+                0, comment.likedByMe, comment.replyCount)
         }
-        return SongCommentsPage(list, list.size.toLong(), false, null, 0)
+        return SongCommentsPage(list, result.total, result.more, null, 0)
     }
 
     suspend fun comments(id: Long, sort: CommentSort, page: Int = 1, cursor: String? = null): SongCommentsPage =

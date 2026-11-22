@@ -119,11 +119,12 @@ import kotlinx.coroutines.flow.drop
                     var expandedReplies by rememberSaveable(state.songId, state.sort, comment.id) { mutableStateOf(false) }
                     val actionsEnabled = !composer.sending && !state.loading && state.busy.isEmpty() && state.replies.values.none { it.loading }
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CommentContent(comment, enabled = !composer.sending,
-                            enhanced = state.enhanced == true, busy = !actionsEnabled || comment.id in state.busy,
+                        CommentContent(comment, enabled = !composer.sending && !state.readOnly,
+                            enhanced = state.enhanced == true && !state.readOnly,
+                            busy = !actionsEnabled || comment.id in state.busy,
                             own = state.meUid != 0L && state.meUid == comment.userId,
                             like = { like(comment) }, delete = { deleting = comment }) { reply(comment); focusReply++ }
-                        if (state.enhanced == true && comment.replyCount > 0) {
+                        if (state.enhanced == true && !state.readOnly && comment.replyCount > 0) {
                             CommentAction(if (expandedReplies) "收起回复" else "查看 ${comment.replyCount} 条回复", "replies_${comment.id}") {
                                 expandedReplies = !expandedReplies
                                 if (expandedReplies && state.replies[comment.id] == null) replies(comment, false)
@@ -170,9 +171,9 @@ import kotlinx.coroutines.flow.drop
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = colors.onSurfaceVariantSummary)
                 }
             }
-            HorizontalDivider(color = colors.onSurface.copy(alpha = .08f))
+            if (!state.readOnly) HorizontalDivider(color = colors.onSurface.copy(alpha = .08f))
             state.actionError?.let { Text(it, fontSize = 12.sp, modifier = Modifier.testTag("comment_action_error")) }
-            composer.replyTo?.let { comment ->
+            if (!state.readOnly) composer.replyTo?.let { comment ->
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.onSurface.copy(alpha = .04f)).padding(start = 12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -182,7 +183,7 @@ import kotlinx.coroutines.flow.drop
                     CommentAction("取消", "cancel_comment_reply", !composer.sending) { reply(null) }
                 }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
+            if (!state.readOnly) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
                 TextField(state = composer.input, modifier = Modifier.fillMaxWidth().then(Modifier.weight(1f).focusRequester(focus).testTag("player_comment_draft")),
                     label = if (composer.replyTo == null) "写下你的评论" else "写下你的回复", useLabelAsPlaceholder = true,
                     insideMargin = DpSize(14.dp, 12.dp), cornerRadius = 16.dp, lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 3),
@@ -191,7 +192,7 @@ import kotlinx.coroutines.flow.drop
                     enabled = !composer.sending && !state.loading && state.busy.isEmpty() && composer.draft.isNotBlank() && composer.draft.length <= 1000, fillWidth = false)
             }
             val feedback = if (composer.draft.length > 1000) "评论最多 1000 字，请删减后发送" else composer.error ?: composer.message
-            if (feedback != null || composer.draft.isNotEmpty()) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            if (!state.readOnly && (feedback != null || composer.draft.isNotEmpty())) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                 Text(feedback ?: "", Modifier.weight(1f).testTag(if (composer.error != null || composer.draft.length > 1000) "player_comment_error" else "player_comment_result")
                     .semantics { liveRegion = LiveRegionMode.Polite }, fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
                 if (composer.draft.isNotEmpty()) Text("${composer.draft.length}/1000", Modifier.padding(start = 8.dp), fontSize = 11.sp,
@@ -258,7 +259,7 @@ import kotlinx.coroutines.flow.drop
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(time, Modifier.weight(1f), fontSize = 11.sp, color = colors.onSurface.copy(alpha = .42f))
                 if (enhanced && own) CommentAction("删除", "delete_comment_${comment.id}", !busy, delete)
-                CommentAction("回复", "reply_comment_${comment.id}", enabled, reply)
+                if (enabled) CommentAction("回复", "reply_comment_${comment.id}", true, reply)
             }
         }
     }

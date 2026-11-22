@@ -53,7 +53,7 @@ data class SearchPage(val songs: List<Song>, val total: Int, val hasMore: Boolea
     val matchSource: String = "", val bitrate: Long = 0, val bits: Int = 0, val size: Long = 0,
     val durationMs: Long = 0, val expectedDurationMs: Long = 0) {
     val matched get() = level == "matched" || source == "netease-match"
-    val qualityLabel get() = if (matched) "匹配音源" else
+    val qualityLabel get() = if (level == "preview" || source == "qq-preview") "试听" else if (matched) "匹配音源" else
         io.github.currencortex.music.core.media.AudioQuality.entries.firstOrNull { it.value == level }?.label ?: "未知音质"
     // Without a file digest, two signed URLs may point to different recordings.
     val cacheIdentity: String get() = if (!matched) "" else md5.takeIf { it.matches(Regex("[a-fA-F0-9]{32}")) }

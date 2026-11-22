@@ -27,7 +27,8 @@ enum class AltSource(val label: String) { BILIBILI("哔哩哔哩"), QQ("QQ音乐
 /** 取流地址的结果：B站与 QQ 都需要 Referer，播放时必须由播放器补头 */
 data class AltStream(val url: String, val referer: String)
 
-data class QqPlayable(val url: String, val format: String, val level: String)
+data class QqPlayable(val url: String, val format: String, val level: String,
+    val validForSeconds: Long = 600, val durationMs: Long = 0, val preview: Boolean = false)
 
 object AltSources {
     private const val UA =
@@ -129,24 +130,75 @@ object AltSources {
     /** QQ音乐：vkey 拼直链。播放器统一补 Referer。 */
     fun qqPlayable(songmid: String, mediaId: String = songmid,
         cookie: String = "", uin: String = "0"): QqPlayable? = runCatching {
-        val raw = qqVkey(songmid, mediaId, cookie, uin)
+        playableFromVkey(qqVkey(songmid, mediaId, cookie, uin)) ?: qqPreview(songmid, cookie, uin)
+    }.getOrNull()
+
+    private fun playableFromVkey(raw: Raw, preview: Boolean = false,
+        durationMs: Long = 0): QqPlayable? {
         val root = Json.parseToJsonElement(raw.body).jsonObject
         val data = root["req_0"]?.jsonObject?.get("data")?.jsonObject ?: return null
+        // QQ 有时返回 purl 但 sip 为空。sjy6 与 dl 都是实测可用的兼容 CDN。
         val sip = data["sip"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
-            ?.firstOrNull { it.isNotBlank() && !it.startsWith("http://ws") } ?: return null
-        val infos = data["midurlinfo"]?.jsonArray ?: return null
-        val purl = infos.asSequence().mapNotNull { it.jsonObject["purl"]?.jsonPrimitive?.contentOrNull }
-            .firstOrNull(String::isNotBlank) ?: return null
+            ?.firstOrNull { it.isNotBlank() && !it.startsWith("http://ws") }
+            ?: "http://sjy6.stream.qqmusic.qq.com/"
+        val purl = data["midurlinfo"]?.jsonArray.orEmpty().asSequence().mapNotNull {
+            it.jsonObject["purl"]?.jsonPrimitive?.contentOrNull
+        }.firstOrNull(String::isNotBlank) ?: return null
         val format = purl.substringBefore('?').substringAfterLast('.', "").lowercase()
-            .ifBlank { "m4a" }
-        val level = when (purl.take(4)) {
+            .ifBlank { if (preview) "mp3" else "m4a" }
+        val level = if (preview) "preview" else when (purl.take(4)) {
             "F000" -> "lossless"
             "M800" -> "exhigh"
             "M500" -> "higher"
             else -> "standard"
         }
-        QqPlayable(sip + purl, format, level)
-    }.getOrNull()
+        val expiration = data["expiration"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0 } ?: 600
+        return QqPlayable(sip + purl, format, level, expiration, durationMs, preview)
+    }
+
+    private data class TrackDetail(val mediaId: String?, val sizeTry: Long, val previewMs: Long)
+
+    private fun trackDetail(songmid: String, cookie: String, uin: String): TrackDetail? {
+        val data = QqLibrary.musicuData(
+            "music.pf_song_detail_svr",
+            "get_song_detail_yqq",
+            buildJsonObject { put("song_type", 0); put("song_mid", songmid) },
+            cookie,
+            uin,
+        )
+        val file = data?.get("track_info")?.jsonObject?.get("file")?.jsonObject ?: return null
+        val end = file["e_30s"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0 }
+        val start = file["b_30s"]?.jsonPrimitive?.longOrNull?.coerceAtLeast(0) ?: 0
+        return TrackDetail(
+            mediaId = file["media_mid"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.matches(Regex("[0-9A-Za-z]{14}")) },
+            sizeTry = file["size_try"]?.jsonPrimitive?.longOrNull ?: 0,
+            previewMs = end?.let { if (start < it) it - start else it } ?: 0,
+        )
+    }
+
+    /** 会员/完整文件取不到时播放 QQ 官方 RS02 试听片段。 */
+    private fun qqPreview(songmid: String, cookie: String, uin: String): QqPlayable? {
+        val detail = trackDetail(songmid, cookie, uin) ?: return null
+        if (detail.sizeTry <= 0 || detail.mediaId == null) return null
+        val body = buildJsonObject {
+            putJsonObject("comm") { put("ct", 24); put("cv", 4747474); put("platform", "yqq.json") }
+            putJsonObject("req_0") {
+                put("module", "music.vkey.GetVkey")
+                put("method", "UrlGetVkey")
+                putJsonObject("param") {
+                    putJsonArray("filename") { add("RS02${detail.mediaId}.mp3") }
+                    put("guid", "10000")
+                    putJsonArray("songmid") { add(songmid) }
+                    putJsonArray("songtype") { add(0) }
+                    put("uin", uin); put("ctx", 0)
+                }
+            }
+        }
+        val raw = postWithCookie("https://u.y.qq.com/cgi-bin/musicu.fcg",
+            "https://y.qq.com/", body.toString(), cookie)
+        return playableFromVkey(raw, preview = true, durationMs = detail.previewMs)
+    }
 
     /**
      * QQ 音乐 vkey：会员曲必须带登录态（uin + Cookie）才可能拿到 purl。
@@ -242,32 +294,66 @@ object QqExtras {
         unescape(lyric).takeIf { it.isNotBlank() }
     }.getOrNull()
 
-    /** 热评：返回 (内容, 昵称, 点赞数, 时间秒) */
-    /** 只用歌名/歌手回查数字 songid（搜索里通常带 songid，收藏/榜单里常常没有） */
-    fun resolveSongId(title: String, artist: String): Long? = runCatching {
+    data class Comment(val id: String, val content: String, val nick: String, val avatar: String,
+        val likes: Long, val timeSeconds: Long, val likedByMe: Boolean, val replyCount: Int)
+    data class CommentPage(val comments: List<Comment>, val total: Long, val more: Boolean)
+
+    /** 对于旧数据才用歌名回查，并用 songmid 排除搜索结果里的同名版本。 */
+    fun resolveSongId(title: String, artist: String, songmid: String? = null): Long? = runCatching {
         val q = java.net.URLEncoder.encode("$title $artist".trim(), "UTF-8")
         val raw = get("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?p=1&n=5&w=$q&format=json")
         val list = kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonObject["data"]
             ?.jsonObject?.get("song")?.jsonObject?.get("list")?.jsonArray ?: return null
-        list.firstOrNull()?.jsonObject?.get("songid")?.jsonPrimitive?.content?.toLongOrNull()
+        val exact = songmid?.let { mid -> list.firstOrNull {
+            it.jsonObject["songmid"]?.jsonPrimitive?.contentOrNull == mid
+        } }
+        exact?.jsonObject?.get("songid")?.jsonPrimitive?.contentOrNull?.toLongOrNull()
     }.getOrNull()
 
-    fun comments(songId: Long, page: Int = 0, pageSize: Int = 25): List<Triple<String, String, Long>> = runCatching {
-        val raw = get("https://c.y.qq.com/base/fcgi-bin/fcg_global_comment_h5.fcg?g_tk=5381&loginUin=0&hostUin=0" +
-            "&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0" +
-            "&cid=205360772&reqtype=2&biztype=1&topid=$songId&cmd=6&needmusiccrit=0&pagenum=$page&pagesize=$pageSize")
-        val obj = kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonObject
-        val list = obj["comment"]?.jsonObject?.get("commentlist")?.jsonArray ?: return emptyList()
-        list.mapNotNull { el ->
+    fun comments(songId: Long, latest: Boolean = false, page: Int = 1,
+        pageSize: Int = 20): CommentPage = runCatching {
+        val newest = latest
+        val data = QqLibrary.musicuData(
+            "music.globalComment.CommentRead",
+            if (newest) "GetNewCommentList" else "GetHotCommentList",
+            buildJsonObject {
+                put("BizType", 1)
+                put("BizId", songId.toString())
+                put("LastCommentSeqNo", "")
+                put("PageSize", pageSize.coerceIn(1, 50))
+                put("PageNum", (page - 1).coerceAtLeast(0))
+                put("PicEnable", 1)
+                if (newest) {
+                    put("FromCommentId", "")
+                    put("WithHot", 0)
+                } else {
+                    put("HotType", 1)
+                    put("WithAirborne", 0)
+                }
+            },
+        ) ?: return CommentPage(emptyList(), 0, false)
+        val list = data["CommentList"]?.jsonObject
+        val comments = list?.get("Comments")?.jsonArray.orEmpty().mapNotNull { el ->
             val o = el.jsonObject
-            val content = o["rootcommentcontent"]?.jsonPrimitive?.content
-                ?: o["content"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            val nick = o["nick"]?.jsonPrimitive?.content
-                ?: o["encrypt_uin"]?.jsonPrimitive?.content ?: "QQ 用户"
-            val likes = o["praisenum"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
-            Triple(content.trim(), nick, likes)
+            val id = o["CmId"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val content = o["Content"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            Comment(
+                id = id,
+                content = content,
+                nick = o["Nick"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "QQ 用户" },
+                avatar = o["Avatar"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    .replace("http://", "https://"),
+                likes = o["PraiseNum"]?.jsonPrimitive?.longOrNull ?: 0,
+                timeSeconds = o["PubTime"]?.jsonPrimitive?.longOrNull ?: 0,
+                likedByMe = o["IsPraised"]?.jsonPrimitive?.intOrNull == 1,
+                replyCount = (o["ReplyCnt"]?.jsonPrimitive?.intOrNull ?: 0).coerceAtLeast(0),
+            )
         }
-    }.getOrDefault(emptyList())
+        val total = data["TotalCmNum"]?.jsonPrimitive?.longOrNull
+            ?: list?.get("Total")?.jsonPrimitive?.longOrNull ?: comments.size.toLong()
+        CommentPage(comments, total, list?.get("HasMore")?.jsonPrimitive?.booleanOrNull == true ||
+            list?.get("HasMore")?.jsonPrimitive?.intOrNull == 1)
+    }.getOrDefault(CommentPage(emptyList(), 0, false))
 }
 
 /** 各「模式」下主页推荐的数据源（都是公开接口，无需登录） */

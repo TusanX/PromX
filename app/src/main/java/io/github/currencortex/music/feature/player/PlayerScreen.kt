@@ -515,7 +515,12 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
             PlayerOverlay.SHARE -> queue.current?.let { io.github.currencortex.music.feature.share.SongShareDialog(it, dismiss) }
             PlayerOverlay.COMMENTS -> PlayerCommentsDialog(comments, dismiss, { vm.loadComments() }, { vm.loadComments(more = true) },
                 commentComposer, vm::onCommentEdited, vm::replyTo, vm::sendComment,
-                vm::selectCommentSort, vm::loadCommentReplies, vm::likeComment, vm::deleteComment)
+                vm::selectCommentSort, vm::loadCommentReplies, vm::likeComment, vm::deleteComment,
+                title = when (queue.current?.musicSource) {
+                    io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC -> "QQ 音乐评论"
+                    io.github.currencortex.music.data.song.MusicSource.BILIBILI -> "哔哩哔哩评论"
+                    else -> "网易云评论"
+                })
             PlayerOverlay.QUEUE -> Unit
             PlayerOverlay.ROAMING -> io.github.currencortex.music.feature.roaming.PersonalRoamingDialog(vm.container, dismiss) {
                 onAiNavigate("user/binding")
