@@ -73,9 +73,10 @@ object QqLibrary {
     /** 当前 musicu RPC 的统一入口。保留业务码，写操作需要区分成功与登录失效。 */
     internal fun musicu(module: String, method: String, param: JsonObject,
         cookie: String = "", uin: String = "0"): MusicuResult {
-        val authst = cookie.split(';').map(String::trim)
-            .firstOrNull { it.startsWith("qm_keyst=") || it.startsWith("qqmusic_key=") }
-            ?.substringAfter('=').orEmpty()
+        val cookieMap = cookie.split(';').map(String::trim).mapNotNull { pair ->
+            pair.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] }
+        }.toMap()
+        val authst = cookieMap["qqmusic_key"] ?: cookieMap["qm_keyst"].orEmpty()
         var gtkHash = 5381L
         for (char in authst) gtkHash = (gtkHash + (gtkHash shl 5) + char.code) and 0x7fffffff
         val body = buildJsonObject {
@@ -86,7 +87,11 @@ object QqLibrary {
                 put("format", "json")
                 put("uin", uin.ifBlank { "0" })
                 put("g_tk", gtkHash)
-                if (authst.isNotBlank()) put("authst", authst)
+                if (authst.isNotBlank()) {
+                    put("qq", uin.ifBlank { "0" })
+                    put("authst", authst)
+                    put("tmeLoginType", QqAuth.loginType(cookieMap))
+                }
             }
             putJsonObject("req_0") {
                 put("module", module)
@@ -113,7 +118,18 @@ object QqLibrary {
         val folders = ownedPlaylists(uin, cookie)
         val liked = folders.firstOrNull(::isLikedFolder)
         val likedTracks = liked?.let { playlistDetail(it.id, cookie, uin)?.tracks?.size }
+        val vip = runCatching {
+            musicuData("VipLogin.VipLoginInter", "vip_login_base", buildJsonObject {}, cookie, uin)
+        }.getOrNull()
+        val vipLevel = when {
+            vip == null -> "未能确认"
+            (vip["superVip"]?.jsonPrimitive?.longOrNull ?: 0) > 0 -> "超级会员"
+            (vip["greenVip"]?.jsonPrimitive?.longOrNull ?: 0) > 0 -> "绿钻会员"
+            else -> vip["vipLevel"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank) ?: "未检测到会员"
+        }
         return listOf(
+            "登录类型：${if (QqAuth.loginType(cookies) == 2) "QQ 账号" else "微信账号"}",
+            "账号权限：$vipLevel",
             "我的歌单：${folders.count { !isLikedFolder(it) }} 个",
             "我喜欢：${likedTracks ?: 0} 首",
         ).joinToString("\n")

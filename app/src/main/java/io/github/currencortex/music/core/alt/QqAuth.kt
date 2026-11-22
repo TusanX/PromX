@@ -160,6 +160,19 @@ object QqAuth {
         collected
     }.getOrDefault(cookies)
 
+    /** A membership check can arrive after the saved music key expired. Refresh it once before accepting a preview. */
+    fun refreshKeyst(cookies: Map<String, String>, uin: String): Map<String, String> = runCatching {
+        if (uin.isBlank()) return@runCatching cookies
+        val withoutMusicKey = cookies.filterKeys { it != "qm_keyst" && it != "qqmusic_key" }
+        val refreshed = exchangeKeyst(ssoKeyst(withoutMusicKey, uin), uin)
+        val newKey = refreshed["qqmusic_key"] ?: refreshed["qm_keyst"].orEmpty()
+        val oldKey = cookies["qqmusic_key"] ?: cookies["qm_keyst"].orEmpty()
+        if (newKey.isBlank() || newKey == oldKey) cookies else cookies + mapOf(
+            "qm_keyst" to newKey,
+            "qqmusic_key" to newKey,
+        )
+    }.getOrDefault(cookies)
+
     /** 从 Cookie 里解析 QQ 号：uin/p_uin 形如 o0123456789，需去掉前缀 o */
     fun resolveUin(cookies: Map<String, String>): String {
         val candidates = listOf("uin", "p_uin", "qqmusic_uin", "ptui_loginuin", "qm_uin", "wxuin", "luin")
@@ -169,6 +182,13 @@ object QqAuth {
             if (digits.isNotBlank()) return digits
         }
         return ""
+    }
+
+    /** QQ 音乐凭据返回的 QQ 账号类型为 2，微信账号为 1。 */
+    fun loginType(cookies: Map<String, String>): Int {
+        cookies["tmeLoginType"]?.toIntOrNull()?.takeIf { it in 1..8 }?.let { return it }
+        val wechat = cookies.keys.any { it == "wxuin" || it == "wxopenid" || it == "wxrefresh_token" }
+        return if (wechat && cookies.keys.none { it == "uin" || it == "p_uin" || it == "qqmusic_uin" }) 1 else 2
     }
 
     /** QQ 的 bkn/g_tk 算法 */

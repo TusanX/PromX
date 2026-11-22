@@ -73,20 +73,34 @@ class MusicRepository(private val api: ApiClient,
             val mid = song.externalIds.qqMusicId ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable, userMessage = "QQ音乐缺少歌曲 ID")
             val mediaId = song.externalIds.qqMediaId?.takeIf(String::isNotBlank) ?: mid
             val qqSession = qqCookie?.invoke()
-            val playable = io.github.currencortex.music.core.alt.AltSources.qqPlayable(
+            fun playableWith(session: io.github.currencortex.music.core.alt.QqSessionStore?) =
+                io.github.currencortex.music.core.alt.AltSources.qqPlayable(
                 mid,
                 mediaId = mediaId,
-                cookie = qqSession?.cookieHeader().orEmpty(),
-                uin = qqSession?.uin.orEmpty().ifBlank { "0" },
+                cookie = session?.cookieHeader().orEmpty(),
+                uin = session?.uin.orEmpty().ifBlank { "0" },
+                loginType = session?.loginType ?: 2,
                 quality = quality,
             )
+            var playable = playableWith(qqSession)
+            // A saved QQ music key can outlive its account entitlement. If it now yields only the
+            // official preview, refresh the same account's key once and request the full file again.
+            if (playable?.preview == true && qqSession != null) {
+                val refreshed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    io.github.currencortex.music.core.alt.QqAuth.refreshKeyst(qqSession.cookies, qqSession.uin)
+                }
+                if (refreshed != qqSession.cookies) {
+                    qqSession.cookies = refreshed
+                    playableWith(qqSession)?.takeUnless { it.preview }?.let { playable = it }
+                }
+            }
             // 完整文件不可用时，qqPlayable 已自动回退到 QQ 官方试听片段。
-            ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable,
+            val resolved = playable ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable,
                 userMessage = if (qqSession == null) "这首歌需要登录 QQ 音乐后才能播放"
                 else "这首歌暂时没有可用的 QQ 音乐播放地址（可能已下架，且无官方试听）")
-            return AudioSource(playable.url, playable.level, 44100, 2, format = playable.format,
-                source = if (playable.preview) "qq-preview" else "qq",
-                validForSeconds = playable.validForSeconds, durationMs = playable.durationMs)
+            return AudioSource(resolved.url, resolved.level, 44100, 2, format = resolved.format,
+                source = if (resolved.preview) "qq-preview" else "qq",
+                validForSeconds = resolved.validForSeconds, durationMs = resolved.durationMs)
         }
         val access = audioAccess()
         return if (access.provider == AudioProvider.LX) lxSource(song, quality, access) else source(song.id, quality, session, refresh)

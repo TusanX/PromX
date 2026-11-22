@@ -9,8 +9,8 @@ import java.io.IOException
 
 data class AudioRequest(val songId: Long, val quality: AudioQuality, val accountId: Long, val session: RequestSession,
     val providerIdentity: String = "currentmusic", val song: io.github.currencortex.music.data.song.Song? = null,
-    val refresh: Boolean = false) {
-    val key get() = AudioCache.key(session.server, accountId, songId, quality, providerIdentity)
+    val refresh: Boolean = false, val cacheScope: String = "") {
+    val key get() = AudioCache.key(session.server, accountId, songId, quality, providerIdentity + cacheScope)
 }
 data class ResolvedAudio(val source: AudioSource, val key: String, val refreshAfterMs: Long = 25_000)
 
@@ -35,7 +35,9 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
     }
     private fun saved(request: AudioRequest): ResolvedAudio? {
         checkRequest(request)
-        val entry = memo[request.key]?.takeIf { it.request == request && it.until > now() } ?: return null
+        val entry = memo[request.key]?.takeIf {
+            it.request == request && it.until > now() && !it.source.isPreview()
+        } ?: return null
         // A network failure can memoize a fully cached source. LRU may reclaim its spans
         // before the memo expires; metadata and a cache:// URI alone are not playable audio.
         if (entry.source.url.startsWith("cache://audio/") && cache.completeSource(entry.cacheKey) == null) {
@@ -67,7 +69,9 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
             denied[key]?.takeIf { it.request == request }?.let { throw it.error }
             // Complete, account/provider/quality-scoped audio does not need a CDN URL.
             // Partial cache must still resolve a live URL to read the missing bytes.
-            cache.completeSource(key)?.takeUnless { it.matched || cache.matchedSourceKey(key) != null }?.let {
+            cache.completeSource(key)?.takeUnless {
+                it.matched || it.isPreview() || cache.matchedSourceKey(key) != null
+            }?.let {
                 checkRequest(request)
                 return@withContext ResolvedAudio(it, key, refreshAfterMs = Long.MAX_VALUE)
             }
@@ -118,4 +122,10 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
 
 /** Matched files never share byte ranges with the official file or a different candidate. */
 internal fun sourceCacheKey(requestKey: String, source: AudioSource): String =
-    if (source.matched) "$requestKey:match:${source.cacheIdentity}" else requestKey
+    when {
+        source.isPreview() -> "$requestKey:preview"
+        source.matched -> "$requestKey:match:${source.cacheIdentity}"
+        else -> requestKey
+    }
+
+private fun AudioSource.isPreview(): Boolean = level == "preview" || source == "qq-preview"

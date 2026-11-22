@@ -626,6 +626,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                     io.github.currencortex.music.feature.binding.QqLoginScreen(
                         onBack = ::navigateBack,
                         onSessionChanged = {
+                            container.audioSources.invalidate()
                             container.libraryRepository.invalidate()
                             libraryVm.refresh()
                         },

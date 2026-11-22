@@ -4,7 +4,7 @@
 //   B站搜索  GET https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=video&keyword=..
 //   B站播放  GET https://api.bilibili.com/x/player/playurl?bvid=..&cid=..&fnval=16
 //   QQ 搜索  GET https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=..&format=json
-//   QQ 播放  POST https://u.y.qq.com/cgi-bin/musicu.fcg  (vkey.GetVkeyServer, 无需签名)
+//   QQ 播放  POST https://u.y.qq.com/cgi-bin/musicu.fcg  (music.vkey.GetVkey, 账号态 + 设备参数)
 package io.github.currencortex.music.core.alt
 
 import java.net.HttpURLConnection
@@ -34,6 +34,9 @@ data class QqPlayable(val url: String, val format: String, val level: String,
 object AltSources {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36"
+    private const val QQ_CLIENT_UA = "QQMusic 14090008(android 15)"
+    private const val QQ_QIMEI36 = "6c9d3cd110abca9b16311cee10001e717614"
+    private const val QQ_DEVICE_ID = "abcdef1234567890abcdef1234567890"
 
     /** HTTP 结果：把状态码和正文都带回来，页面才能显示真实原因 */
     data class Raw(val code: Int, val body: String)
@@ -131,32 +134,42 @@ object AltSources {
     /** QQ音乐：vkey 拼直链。播放器统一补 Referer。 */
     fun qqPlayable(songmid: String, mediaId: String = songmid,
         cookie: String = "", uin: String = "0",
+        loginType: Int = 2,
         quality: io.github.currencortex.music.core.media.AudioQuality =
             io.github.currencortex.music.core.media.AudioQuality.AUTO): QqPlayable? = runCatching {
-        playableFromVkey(qqVkey(songmid, mediaId, cookie, uin, quality)) ?: qqPreview(songmid, cookie, uin)
+        playableFromVkey(qqVkey(songmid, mediaId, cookie, uin, loginType, quality))
+            ?: qqPreview(songmid, cookie, uin, loginType)
     }.getOrNull()
 
     private fun playableFromVkey(raw: Raw, preview: Boolean = false,
         durationMs: Long = 0): QqPlayable? {
         val root = Json.parseToJsonElement(raw.body).jsonObject
-        val data = root["req_0"]?.jsonObject?.get("data")?.jsonObject ?: return null
+        val node = root["music.vkey.GetVkey"]?.jsonObject ?: root["req_0"]?.jsonObject
+            ?: root["vkey.GetVkeyServer"]?.jsonObject ?: return null
+        val data = node["data"]?.jsonObject ?: return null
         // QQ 有时返回 purl 但 sip 为空。sjy6 与 dl 都是实测可用的兼容 CDN。
         val sip = data["sip"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
             ?.firstOrNull { it.isNotBlank() && !it.startsWith("http://ws") }
             ?: "http://sjy6.stream.qqmusic.qq.com/"
-        val purl = data["midurlinfo"]?.jsonArray.orEmpty().asSequence().mapNotNull {
-            it.jsonObject["purl"]?.jsonPrimitive?.contentOrNull
-        }.firstOrNull(String::isNotBlank) ?: return null
+        val info = data["midurlinfo"]?.jsonArray.orEmpty().asSequence().firstOrNull {
+            it.jsonObject["purl"]?.jsonPrimitive?.contentOrNull?.isNotBlank() == true
+        }?.jsonObject ?: return null
+        val purl = info["purl"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank) ?: return null
         val format = purl.substringBefore('?').substringAfterLast('.', "").lowercase()
             .ifBlank { if (preview) "mp3" else "m4a" }
-        val level = if (preview) "preview" else when (purl.take(4)) {
+        val filename = info["filename"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val level = if (preview) "preview" else when (filename.take(4).ifBlank { purl.take(4) }) {
             "F000" -> "lossless"
+            "RS01" -> "hires"
+            "AI00" -> "jymaster"
             "M800" -> "exhigh"
             "M500" -> "higher"
             else -> "standard"
         }
         val expiration = data["expiration"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0 } ?: 600
-        return QqPlayable(sip + purl, format, level, expiration, durationMs, preview)
+        val url = if (purl.startsWith("http")) purl
+        else sip.replace("http://", "https://").trimEnd('/') + "/" + purl.trimStart('/')
+        return QqPlayable(url, format, level, expiration, durationMs, preview)
     }
 
     private data class TrackDetail(val mediaId: String?, val sizeTry: Long, val previewMs: Long)
@@ -181,25 +194,18 @@ object AltSources {
     }
 
     /** 会员/完整文件取不到时播放 QQ 官方 RS02 试听片段。 */
-    private fun qqPreview(songmid: String, cookie: String, uin: String): QqPlayable? {
+    private fun qqPreview(songmid: String, cookie: String, uin: String, loginType: Int): QqPlayable? {
         val detail = trackDetail(songmid, cookie, uin) ?: return null
         if (detail.sizeTry <= 0 || detail.mediaId == null) return null
-        val body = buildJsonObject {
-            putJsonObject("comm") { put("ct", 24); put("cv", 4747474); put("platform", "yqq.json") }
-            putJsonObject("req_0") {
-                put("module", "music.vkey.GetVkey")
-                put("method", "UrlGetVkey")
-                putJsonObject("param") {
-                    putJsonArray("filename") { add("RS02${detail.mediaId}.mp3") }
-                    put("guid", "10000")
-                    putJsonArray("songmid") { add(songmid) }
-                    putJsonArray("songtype") { add(0) }
-                    put("uin", uin); put("ctx", 0)
-                }
-            }
+        val param = buildJsonObject {
+            put("uin", uin.ifBlank { "0" })
+            putJsonArray("filename") { add("RS02${detail.mediaId}.mp3") }
+            put("guid", qqGuid())
+            putJsonArray("songmid") { add(songmid) }
+            putJsonArray("songtype") { add(0) }
+            put("ctx", 0)
         }
-        val raw = postWithCookie("https://u.y.qq.com/cgi-bin/musicu.fcg",
-            "https://y.qq.com/", body.toString(), cookie)
+        val raw = qqVkeyRequest("music.vkey.GetVkey", param, cookie, uin, loginType)
         return playableFromVkey(raw, preview = true, durationMs = detail.previewMs)
     }
 
@@ -209,83 +215,35 @@ object AltSources {
      */
     fun qqVkey(songmid: String, mediaId: String = songmid,
         cookie: String = "", uin: String = "0",
+        loginType: Int = 2,
         quality: io.github.currencortex.music.core.media.AudioQuality =
             io.github.currencortex.music.core.media.AudioQuality.AUTO): Raw {
         require(songmid.matches(Regex("[0-9A-Za-z]{10,20}"))) { "QQ 音乐歌曲 ID 无效" }
         val effectiveMediaId = mediaId.takeIf { it.matches(Regex("[0-9A-Za-z]{10,20}")) } ?: songmid
-        val guid = "10000"
-        // QQ 的 filename 是「档位 + songmid + media_mid + 扩展名」。漏掉扩展名时接口
-        // 仍可能返回 purl，但 CDN 会以 file not exist 404 拒绝，播放器只能看到播放失败。
-        val formats = when (quality) {
-            io.github.currencortex.music.core.media.AudioQuality.STANDARD ->
-                listOf("C400" to "m4a", "M500" to "mp3")
-            io.github.currencortex.music.core.media.AudioQuality.HIGHER ->
-                listOf("M500" to "mp3", "C400" to "m4a")
-            io.github.currencortex.music.core.media.AudioQuality.EXHIGH ->
-                listOf("M800" to "mp3", "M500" to "mp3")
-            io.github.currencortex.music.core.media.AudioQuality.JYEFFECT ->
-                listOf("M800" to "mp3", "F000" to "flac")
-            io.github.currencortex.music.core.media.AudioQuality.LOSSLESS,
-            io.github.currencortex.music.core.media.AudioQuality.HIRES,
-            io.github.currencortex.music.core.media.AudioQuality.JYMASTER,
-            io.github.currencortex.music.core.media.AudioQuality.SKY,
-            io.github.currencortex.music.core.media.AudioQuality.VIVID,
-            io.github.currencortex.music.core.media.AudioQuality.DOLBY ->
-                listOf("F000" to "flac", "M800" to "mp3")
-            io.github.currencortex.music.core.media.AudioQuality.AUTO ->
-                listOf("F000" to "flac", "M800" to "mp3", "M500" to "mp3", "C400" to "m4a")
-        }
-        val files = formats.map { (prefix, extension) -> "$prefix$songmid$effectiveMediaId.$extension" }
-        val authst = cookie.split(';')
-            .map(String::trim)
-            .firstOrNull { it.startsWith("qm_keyst=") || it.startsWith("qqmusic_key=") }
-            ?.substringAfter('=')
-            .orEmpty()
+        val formats = qqFormats(quality)
         val effectiveUin = uin.ifBlank { "0" }
-        val gtk = if (authst.isNotBlank()) QqAuth.gTk(authst) else 5381L
-        val mediaFiles = formats.map { (prefix, extension) ->
-            "$prefix$effectiveMediaId.$extension"
-        }
-        val combinedFiles = formats.map { (prefix, extension) ->
-            "$prefix$songmid$effectiveMediaId.$extension"
-        }
-        val requestFiles = formats.indices.flatMap { index ->
-            listOf(mediaFiles[index], combinedFiles[index])
-        }
-        val requestUrl = "https://u.y.qq.com/cgi-bin/musicu.fcg?-=getplaysongvkey&g_tk=$gtk" +
-            "&loginUin=$effectiveUin&hostUin=0&format=json&platform=yqq.json&needNewCode=0"
-
-        // Current YQQ protocol.  The filename normally uses media_mid alone; the combined
-        // form is kept as a fallback because older catalog entries still rely on it.
-        val modernBody = buildJsonObject {
-            putJsonObject("comm") {
-                put("uin", effectiveUin.toLongOrNull() ?: 0L)
-                put("format", "json")
-                put("ct", 24)
-                put("cv", 4747474)
-                put("platform", "yqq.json")
-                put("g_tk", gtk)
-                put("tmeLoginType", 2)
-                if (authst.isNotBlank()) put("authst", authst)
-            }
-            putJsonObject("req_0") {
-                put("module", "music.vkey.GetVkey")
-                put("method", "UrlGetVkey")
-                putJsonObject("param") {
-                    put("guid", guid)
+        var lastModern: Raw? = null
+        for (format in formats) {
+            val attempts = if (format.prefix == "M500") 2 else 1
+            repeat(attempts) {
+                val modernParam = buildJsonObject {
+                    put("uin", effectiveUin)
+                    putJsonArray("filename") {
+                        add("${format.prefix}$songmid$effectiveMediaId.${format.format}")
+                    }
+                    put("guid", qqGuid())
                     putJsonArray("songmid") { add(songmid) }
                     putJsonArray("songtype") { add(0) }
-                    put("uin", effectiveUin)
-                    put("loginflag", 1)
-                    put("platform", "20")
                     put("ctx", 0)
-                    putJsonArray("filename") { requestFiles.forEach(::add) }
                 }
+                val modern = qqVkeyRequest("music.vkey.GetVkey", modernParam, cookie, effectiveUin, loginType)
+                lastModern = modern
+                if (runCatching { playableFromVkey(modern) }.getOrNull() != null) return modern
             }
-        }.toString()
-        val modern = postWithCookie(requestUrl, "https://y.qq.com/", modernBody, cookie)
-        if (runCatching { playableFromVkey(modern) }.getOrNull() != null) return modern
+        }
 
+        val authst = qqMusicKey(cookie)
+        val gtk = if (authst.isNotBlank()) QqAuth.gTk(authst) else 5381L
         val legacyBody = buildJsonObject {
             putJsonObject("comm") {
                 put("uin", effectiveUin)
@@ -294,28 +252,108 @@ object AltSources {
                 put("cv", 0)
                 put("g_tk", gtk)
                 if (authst.isNotBlank()) put("authst", authst)
+                if (authst.isNotBlank()) put("tmeLoginType", loginType)
             }
             putJsonObject("req_0") {
                 put("module", "vkey.GetVkeyServer")
                 put("method", "CgiGetVkey")
                 putJsonObject("param") {
-                    put("guid", guid)
+                    put("guid", qqGuid())
                     putJsonArray("songmid") { add(songmid) }
                     putJsonArray("songtype") { add(0) }
                     put("uin", effectiveUin)
                     put("loginflag", 1)
                     put("platform", "20")
-                    putJsonArray("filename") { files.forEach(::add) }
+                    putJsonArray("filename") {
+                        formats.forEach { add("${it.prefix}$songmid$effectiveMediaId.${it.format}") }
+                    }
                 }
             }
         }.toString()
-        return postWithCookie(requestUrl, "https://y.qq.com/", legacyBody, cookie)
+        val requestUrl = "https://u.y.qq.com/cgi-bin/musicu.fcg?-=getplaysongvkey&g_tk=$gtk" +
+            "&loginUin=$effectiveUin&hostUin=0&format=json&platform=yqq.json&needNewCode=0"
+        val legacy = postWithCookie(requestUrl, "https://y.qq.com/", legacyBody, cookie)
+        if (runCatching { playableFromVkey(legacy) }.getOrNull() != null) return legacy
+        return lastModern ?: legacy
     }
 
-    private fun postWithCookie(url: String, referer: String, body: String, cookie: String): Raw {
+    private data class QqFormat(val prefix: String, val format: String)
+
+    private fun qqFormats(quality: io.github.currencortex.music.core.media.AudioQuality): List<QqFormat> = when (quality) {
+        io.github.currencortex.music.core.media.AudioQuality.STANDARD -> listOf(QqFormat("M500", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.HIGHER -> listOf(QqFormat("M500", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.EXHIGH -> listOf(QqFormat("M800", "mp3"),
+            QqFormat("M500", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.JYEFFECT -> listOf(QqFormat("Q000", "flac"),
+            QqFormat("M800", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.LOSSLESS -> listOf(QqFormat("F000", "flac"),
+            QqFormat("M800", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.HIRES -> listOf(QqFormat("RS01", "flac"),
+            QqFormat("F000", "flac"), QqFormat("M800", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.JYMASTER -> listOf(QqFormat("AI00", "flac"),
+            QqFormat("Q000", "flac"), QqFormat("M800", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.SKY -> listOf(QqFormat("Q001", "flac"),
+            QqFormat("Q003", "ogg"), QqFormat("Q005", "ogg"), QqFormat("M800", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.VIVID -> listOf(QqFormat("TL01", "nac"),
+            QqFormat("M800", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.DOLBY -> listOf(QqFormat("D008", "mp4"),
+            QqFormat("D004", "mp4"), QqFormat("M800", "mp3"))
+        io.github.currencortex.music.core.media.AudioQuality.AUTO -> listOf(QqFormat("F000", "flac"),
+            QqFormat("M800", "mp3"), QqFormat("M500", "mp3"))
+    }
+
+    private fun qqMusicKey(cookie: String): String = cookie.split(';')
+        .map(String::trim)
+        .mapNotNull { pair -> pair.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+        .toMap()
+        .let { it["qqmusic_key"] ?: it["qm_keyst"].orEmpty() }
+
+    private fun qqGuid(): String = java.util.UUID.randomUUID().toString().replace("-", "")
+
+    private fun qqVkeyRequest(module: String, param: JsonObject, cookie: String, uin: String, loginType: Int): Raw {
+        val authst = qqMusicKey(cookie)
+        val gtk = if (authst.isNotBlank()) QqAuth.gTk(authst) else 5381L
+        val body = buildJsonObject {
+            put("comm", buildJsonObject {
+                put("ct", 11)
+                put("cv", 14090008)
+                put("v", 14090008)
+                put("chid", "10003505")
+                put("QIMEI", "")
+                put("QIMEI36", QQ_QIMEI36)
+                put("tmeAppID", "qqmusic")
+                put("format", "json")
+                put("inCharset", "utf-8")
+                put("outCharset", "utf-8")
+                put("OpenUDID", QQ_DEVICE_ID)
+                put("udid", QQ_DEVICE_ID)
+                put("OpenUDID2", QQ_DEVICE_ID)
+                put("aid", QQ_DEVICE_ID.substring(0, 16))
+                put("os_ver", "15")
+                put("phonetype", "MI 6")
+                put("devicelevel", "29")
+                put("newdevicelevel", "29")
+                put("rom", "xiaomi/iarim/sagit:10/eomam.200122.001/7654321:user/release-keys")
+                if (authst.isNotBlank()) {
+                    put("qq", uin.ifBlank { "0" })
+                    put("authst", authst)
+                    put("tmeLoginType", loginType)
+                }
+            })
+            put("req_0", buildJsonObject {
+                put("module", module)
+                put("method", "UrlGetVkey")
+                put("param", param)
+            })
+        }
+        val url = "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&g_tk=$gtk"
+        return postWithCookie(url, "https://y.qq.com/", body.toString(), cookie, QQ_CLIENT_UA)
+    }
+
+    private fun postWithCookie(url: String, referer: String, body: String, cookie: String, userAgent: String = UA): Raw {
         val c = URL(url).openConnection() as HttpURLConnection
         c.requestMethod = "POST"
-        c.setRequestProperty("User-Agent", UA)
+        c.setRequestProperty("User-Agent", userAgent)
         c.setRequestProperty("Referer", referer)
         c.setRequestProperty("content-type", "application/json")
         if (cookie.isNotBlank()) c.setRequestProperty("Cookie", cookie)

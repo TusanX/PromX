@@ -182,7 +182,10 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
             return AudioRequest(song.id, quality, owner.profile?.uid ?: 0L,
                 RequestSession("https://music.163.com/", null, owner.revision), access.identity, song)
         }
-        return AudioRequest(song.id, quality, accountRepository.state.value.account?.id ?: 0L, audioSession(), access.identity, song)
+        val cacheScope = if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+            ":qq:${qqSession.authScope}" else ""
+        return AudioRequest(song.id, quality, accountRepository.state.value.account?.id ?: 0L, audioSession(),
+            access.identity, song, cacheScope = cacheScope)
     }
     val announcements = io.github.currencortex.music.data.announcement.AnnouncementRepository(apiClient)
     val announcementPreferences = io.github.currencortex.music.data.announcement.AnnouncementPreferences(settingsStore)

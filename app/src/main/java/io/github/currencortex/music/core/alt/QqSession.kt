@@ -37,5 +37,15 @@ class QqSessionStore(context: Context) {
     val uin: String get() = account?.uin?.takeIf(String::isNotBlank)
         ?: QqAuth.resolveUin(cookies)
 
+    val loginType: Int get() = QqAuth.loginType(cookies)
+
+    /** Cache key scope changes whenever account or music key changes. */
+    val authScope: String get() {
+        val musicKey = cookies["qqmusic_key"] ?: cookies["qm_keyst"].orEmpty()
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest("$uin\n$musicKey".toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it.toInt() and 255) }.take(20)
+    }
+
     fun clear() = prefs.edit().clear().apply()
 }
