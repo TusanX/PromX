@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#090a0c">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="PromX 是面向 Android 的多来源原生音乐播放器，连接网易云音乐、QQ 音乐、哔哩哔哩、Navidrome、Emby 与本地音乐。">
+  <meta property="og:title" content="PromX — 所有音乐，一个播放控制">
+  <meta property="og:description" content="共享搜索、收藏、队列、歌词与播放控制，同时保留每个音乐来源自己的工作方式。">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/brand/og-cover.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>PromX — 所有音乐，一个播放控制</title>
+  <link rel="icon" href="assets/brand/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="assets/brand/promx-icon.png">
+  <link rel="manifest" href="site.webmanifest">
+  <link rel="stylesheet" href="styles.css?v=7">
+  <script src="vendor/gsap.min.js?v=7" defer></script>
+  <script src="vendor/ScrollTrigger.min.js?v=7" defer></script>
+  <script src="script.js?v=7" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <div class="lyric-backdrop" aria-hidden="true">
+    <span class="lyric-ghost lyric-ghost--a">如果只能许下一个愿望</span>
+    <span class="lyric-ghost lyric-ghost--b">Where the world full of flowers</span>
+    <span class="lyric-ghost lyric-ghost--c">夜が明けるまで</span>
+    <span class="lyric-ghost lyric-ghost--d lyric-ghost--accent">moshi mo negai hitotsu dake</span>
+    <span class="lyric-ghost lyric-ghost--e">让这一首歌，拥有画面的重量</span>
+    <span class="lyric-ghost lyric-ghost--f">声が届くまで</span>
+    <span class="lyric-ghost lyric-ghost--g">穿过潮湿的霓虹抵达明天</span>
+  </div>
+
+  <header class="site-header" id="siteHeader">
+    <div class="nav-inner">
+      <a class="brand" href="#top" aria-label="PromX 首页"><img src="assets/brand/promx-icon.png" width="28" height="28" alt=""><span>PromX</span></a>
+      <nav class="desktop-nav" aria-label="主要导航">
+        <a href="#sources">音乐来源</a><a href="#player">播放体验</a><a href="#lyrics">歌词与视频</a><a href="#team">项目</a>
+      </nav>
+      <a class="nav-action" href="download.html?source=nav">下载 Android 版</a>
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="mobileMenu" aria-label="打开导航"><span></span><span></span></button>
+    </div>
+    <nav class="mobile-menu" id="mobileMenu" aria-label="移动导航">
+      <a href="#sources">音乐来源</a><a href="#player">播放体验</a><a href="#lyrics">歌词与视频</a><a href="#team">项目</a><a href="download.html?source=mobile-nav">下载 Android 版</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-grid page-width">
+        <div class="hero-copy">
+          <p class="release-line"><span class="status-dot" aria-hidden="true"></span>1.6.9 稳定版 · Android 8.0+</p>
+          <h1><span class="headline-line">散落的音乐，</span><span class="headline-line">回到一个播放器。</span></h1>
+          <p class="hero-lead">网易云音乐、QQ 音乐、哔哩哔哩、Navidrome、Emby 与本地音乐，共享搜索、收藏、队列和播放体验。</p>
+          <div class="hero-actions">
+            <a class="primary-action" href="download.html?auto=1&amp;source=hero">下载 PromX <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4L6 9M4 16h12"/></svg></a>
+            <a class="secondary-action" href="#player">查看播放体验</a>
+          </div>
+          <dl class="hero-facts" aria-label="产品能力">
+            <div><dt>来源</dt><dd>6 类音乐服务</dd></div><div><dt>收藏</dt><dd>跟随当前账号</dd></div><div><dt>歌词</dt><dd>逐字、翻译、罗马音</dd></div>
+          </dl>
+        </div>
+
+        <div class="hero-product" id="heroProduct" aria-label="PromX 首页界面与播放器状态">
+          <canvas class="signal-field" id="signalField" aria-hidden="true"></canvas>
+          <div class="signal-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="product-rail product-rail--top" aria-hidden="true"><span>PromX / 01</span><i></i><span>正在播放</span></div>
+          <div class="device device--hero"><div class="device-frame"><div class="device-speaker"></div><div class="device-screen"><img src="assets/screens/home.webp" width="540" height="1170" alt="PromX 首页，显示每日推荐、私人漫游与音乐快捷入口"></div></div></div>
+          <aside class="now-playing" aria-label="当前播放示例">
+            <div class="now-playing__head"><span>当前播放</span><span class="source-chip">QQ 音乐</span></div>
+            <p class="track-title">冬天又来临</p><p class="track-meta">罗言 · 每日推荐</p>
+            <div class="track-progress" aria-hidden="true"><span></span></div>
+            <dl class="playback-meta"><div><dt>音质</dt><dd>无损</dd></div><div><dt>输出</dt><dd>48 kHz</dd></div><div><dt>状态</dt><dd>已收藏</dd></div></dl>
+          </aside>
+          <div class="product-rail product-rail--bottom" aria-hidden="true"><span>统一队列</span><i></i><span>多来源切换</span></div>
+        </div>
+      </div>
+      <div class="hero-foot page-width" aria-hidden="true"><span>原生 Android 播放器</span><span>向下浏览产品结构</span></div>
+    </section>
+
+    <section class="source-section section" id="sources" aria-labelledby="sourcesTitle">
+      <div class="page-width">
+        <header class="section-header"><h2 id="sourcesTitle">来源可以不同，操作不需要重新学习。</h2><p>首页推荐、搜索、收藏、最近播放与每日推荐都跟随当前音乐来源切换。账号状态留在各自平台，PromX 只提供统一的播放层。</p></header>
+        <div class="source-table" role="list" aria-label="PromX 支持的平台与能力">
+          <article class="source-row" role="listitem" data-source-row><span class="source-mark" aria-hidden="true">N</span><div class="source-name"><h3>网易云音乐</h3><p>账号、推荐与社交</p></div><p>我喜欢、每日推荐、逐字歌词、一起听与关注动态</p><span class="source-state">原生账号绑定</span></article>
+          <article class="source-row" role="listitem" data-source-row><span class="source-mark" aria-hidden="true">Q</span><div class="source-name"><h3>QQ 音乐</h3><p>收藏、推荐与视频</p></div><p>红心状态、最近播放、相似歌曲、往期日推与多线路 MV</p><span class="source-state">独立登录链路</span></article>
+          <article class="source-row" role="listitem" data-source-row><span class="source-mark" aria-hidden="true">B</span><div class="source-name"><h3>哔哩哔哩</h3><p>视频与音频播放</p></div><p>收藏夹、关注动态、视频点赞与音频模式</p><span class="source-state">按 BVID 同步</span></article>
+          <article class="source-row" role="listitem" data-source-row><span class="source-mark" aria-hidden="true">P</span><div class="source-name"><h3>私有与本地</h3><p>自己的音乐服务器</p></div><p>Navidrome、Emby 与本地文件夹扫描</p><span class="source-state">凭据只留在本机</span></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="player-section section" id="player" aria-labelledby="playerTitle">
+      <div class="page-width">
+        <header class="section-header section-header--wide"><h2 id="playerTitle">从打开应用到切到下一首，界面始终知道正在发生什么。</h2><p>当前歌曲贯穿播放器、评论、MV、下载、队列与歌词管理。切换页面不会丢掉来源、收藏状态或播放进度。</p></header>
+        <div class="player-story">
+          <div class="story-stage" id="storyStage" aria-label="PromX 各界面切换预览">
+            <div class="stage-topline"><span>PromX / Interface</span><span id="stageIndex">01 — 04</span></div>
+            <div class="device device--story"><div class="device-frame"><div class="device-speaker"></div><div class="device-screen screen-stack">
+              <img class="story-screen is-active" data-screen="home" src="assets/screens/home.webp" width="540" height="1170" alt="PromX 首页推荐">
+              <img class="story-screen" data-screen="discover" src="assets/screens/discover.webp" width="540" height="1170" alt="PromX 发现页">
+              <img class="story-screen" data-screen="library" src="assets/screens/library.webp" width="540" height="1170" alt="PromX 我的音乐">
+              <img class="story-screen" data-screen="settings" src="assets/screens/settings.webp" width="540" height="1170" alt="PromX 设置">
+            </div></div></div>
+            <div class="stage-context"><span id="stageContext">首页</span><i aria-hidden="true"></i><span id="stageTrack">每日推荐已就绪</span></div>
+          </div>
+          <div class="story-copy" aria-label="播放体验说明">
+            <article class="story-chapter is-active" data-story-step data-screen="home" data-context="首页" data-track="每日推荐已就绪"><span>01</span><h3>打开就有内容，播放入口留在拇指附近。</h3><p>每日推荐、猜你喜欢、私人 FM 与推荐歌单在同一视图中呈现。首页会根据当前来源重新加载，不把 QQ 音乐、网易云和哔哩哔哩的内容混在一起。</p></article>
+            <article class="story-chapter" data-story-step data-screen="discover" data-context="发现" data-track="曲风与关注已分离"><span>02</span><h3>发现页有自己的分类，也有对应平台的关注动态。</h3><p>曲风、活动、关注和本地推荐共享一致的版式。切换来源时，关注列表、每日推荐和热门内容重新获取，不沿用上一来源的数据。</p></article>
+            <article class="story-chapter" data-story-step data-screen="library" data-context="我的" data-track="收藏同步当前账号"><span>03</span><h3>红心、歌单、最近播放和听歌报告回到正确账号。</h3><p>收藏动作会等待服务端确认，再更新界面。QQ 音乐、哔哩哔哩、网易云和私有服务分别处理自己的收藏语义，同时保留同一套操作路径。</p></article>
+            <article class="story-chapter" data-story-step data-screen="settings" data-context="设置" data-track="播放能力逐项可调"><span>04</span><h3>性能、歌词、音质、视频背景和音频输出都能细调。</h3><p>较旧设备可以降低歌词渲染质量。播放缓冲、音频过渡、音效、输出采样率和外观效果也会根据设备能力逐项选择。</p></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lyrics-section section" id="lyrics" aria-labelledby="lyricsTitle">
+      <div class="page-width lyrics-layout">
+        <div class="lyrics-copy">
+          <h2 id="lyricsTitle">歌词跟着旋律走，也保留你此刻需要的语言。</h2>
+          <p>逐字动画、翻译、罗马音和副歌节奏光晕共用一条播放时间轴。沉浸罗马音可以暂时收起主字幕，让发音和翻译同时留在画面上。</p>
+          <dl class="feature-list"><div><dt>隐喻歌词</dt><dd>Folia 官方舞台、竖屏自适应与低性能回退</dd></div><div><dt>MV 背景</dt><dd>视频静音循环，字幕和控制层独立叠加</dd></div><div><dt>音画同步</dt><dd>拖动进度、暂停和切歌时保持同一时间基准</dd></div></dl>
+        </div>
+        <div class="lyric-stage" aria-label="沉浸歌词效果示意">
+          <div class="lyric-stage__bar"><span>沉浸罗马音</span><span>翻译开启</span></div>
+          <div class="lyric-stage__body"><p class="lyric-romanized">moshi mo negai hitotsu dake</p><p class="lyric-translated">如果只能许下一个愿望</p><p class="lyric-source">もしも願い一つだけ</p></div>
+          <div class="lyric-stage__foot"><span>02:18</span><i><b></b></i><span>04:06</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="capabilities-section section" aria-labelledby="capabilitiesTitle">
+      <div class="page-width">
+        <header class="section-header section-header--compact"><h2 id="capabilitiesTitle">播放器之外的细节，同样属于同一次播放。</h2></header>
+        <div class="capability-grid">
+          <article class="capability capability--large"><div class="capability-copy"><span>评论与收藏</span><h3>喜欢、查看评论、加入歌单，不离开当前播放上下文。</h3><p>评论层、收藏列表和歌曲菜单共享当前歌曲与来源，失败时给出明确结果。</p></div><div class="comment-preview" aria-hidden="true"><p>把节奏和雨声一起收进前奏</p><small>12 条回复 · QQ 音乐</small><p>这一段贝斯进入得太准了</p><small>已点赞 · 哔哩哔哩</small></div></article>
+          <article class="capability"><span>一起听</span><h3>创建、加入、邀请与同步进度。</h3><p>两个人保持同一段播放位置，退出房间后个人播放状态保留。</p></article>
+          <article class="capability"><span>音频输出</span><h3>采样率、输出设备与位深状态清晰可见。</h3><p>蓝牙、USB、扬声器与耳机链路分别显示当前能力。</p></article>
+          <article class="capability"><span>下载与缓存</span><h3>视频、音频和离线缓存使用各自正确的保存位置。</h3><p>下载失败可重试，已完成的文件可以继续播放和分享。</p></article>
+          <article class="capability"><span>隐私</span><h3>账号凭据只留在本机。</h3><p>音乐文件由来源平台提供，PromX 不托管曲库。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="team-section section" id="team" aria-labelledby="teamTitle">
+      <div class="page-width team-layout">
+        <div class="team-copy"><h2 id="teamTitle">由维护者与上游社区共同完成。</h2><p>PromX 建立在 CurrentMusic、CurrentMusicX 与 Folia 等项目的长期工作之上。每个名字都连接到对应 GitHub 主页。</p><a class="project-link" href="https://github.com/TusanX/PromX" target="_blank" rel="noreferrer"><span><small>GitHub 项目</small><strong>TusanX / PromX</strong></span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M8 6h6v6"/></svg></a></div>
+        <div class="creator-list" aria-label="PromX 创作者与贡献者">
+          <a href="https://github.com/TusanX" target="_blank" rel="noreferrer"><img src="assets/contributors/TusanX.webp" width="56" height="56" alt="" loading="lazy"><span><strong>TusanX</strong><small>维护、发行构建、产品体验</small></span></a>
+          <a href="https://github.com/bileizhen" target="_blank" rel="noreferrer"><img src="assets/contributors/bileizhen.webp" width="56" height="56" alt="" loading="lazy"><span><strong>bileizhen</strong><small>CurrentMusicX 作者</small></span></a>
+          <a href="https://github.com/backrooms-yrc" target="_blank" rel="noreferrer"><img src="assets/contributors/backrooms-yrc.webp" width="56" height="56" alt="" loading="lazy"><span><strong>backrooms-yrc</strong><small>CurrentMusic 作者</small></span></a>
+          <a href="https://github.com/LinYe2804" target="_blank" rel="noreferrer"><img src="assets/contributors/LinYe2804.webp" width="56" height="56" alt="" loading="lazy"><span><strong>LinYe2804</strong><small>歌词与界面性能</small></span></a>
+          <a href="https://github.com/KelierAndes" target="_blank" rel="noreferrer"><img src="assets/contributors/KelierAndes.webp" width="56" height="56" alt="" loading="lazy"><span><strong>KelierAndes</strong><small>歌词交互与搜索</small></span></a>
+          <a href="https://github.com/WhiteXero" target="_blank" rel="noreferrer"><img src="assets/contributors/WhiteXero.webp" width="56" height="56" alt="" loading="lazy"><span><strong>WhiteXero</strong><small>上游贡献</small></span></a>
+          <a href="https://github.com/OopsUnix" target="_blank" rel="noreferrer"><img src="assets/contributors/OopsUnix.webp" width="56" height="56" alt="" loading="lazy"><span><strong>OopsUnix</strong><small>上游贡献</small></span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="download-section" id="download" aria-labelledby="downloadTitle">
+      <div class="page-width download-layout">
+        <div class="download-product"><img src="assets/brand/promx-icon.png" width="96" height="96" alt="PromX 应用图标"><div><span>PromX</span><small>Android 8.0 及以上</small></div></div>
+        <div class="download-copy">
+          <p class="release-line"><span class="status-dot" aria-hidden="true"></span>1.6.15 稳定版 · versionCode 7400000</p>
+          <h2 id="downloadTitle">现在开始，把音乐放回同一个地方。</h2>
+          <p>腾讯云分片下载，安装包约 63 MB。发布证书签名，下载后可在下载页校验 SHA-256。</p>
+          <div class="download-actions"><a class="primary-action primary-action--dark" href="download.html?auto=1&amp;source=footer">下载 PromX 1.6.9 <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4L6 9M4 16h12"/></svg></a><a class="secondary-action secondary-action--dark" href="https://github.com/TusanX/PromX" target="_blank" rel="noreferrer">查看 GitHub</a></div>
+          <div class="download-checks"><span>Android 8.0+</span><span>手机与横屏</span><span>GPL-3.0</span><span>不托管音乐文件</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><div class="page-width footer-inner"><div class="footer-brand"><img src="assets/brand/promx-icon.png" width="24" height="24" alt=""><span>PromX</span></div><div class="footer-links"><a href="https://github.com/TusanX/PromX" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/TusanX/PromX/issues" target="_blank" rel="noreferrer">反馈</a><a href="https://github.com/TusanX/PromX/blob/main/PRIVACY.md" target="_blank" rel="noreferrer">隐私</a><a href="https://github.com/TusanX/PromX/blob/main/LICENSE" target="_blank" rel="noreferrer">许可证</a></div><p>音乐服务可用性取决于来源平台、账号地区和版权状态。</p></div></footer>
+</body>
+</html>

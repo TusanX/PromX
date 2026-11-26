@@ -18,6 +18,7 @@ import io.github.currencortex.music.core.media.PlayerMode
 import io.github.currencortex.music.data.song.Song
 import io.github.currencortex.music.feature.library.LibrarySongActions
 import io.github.currencortex.music.feature.library.LibraryViewModel
+import io.github.currencortex.music.feature.library.artistRoute
 import io.github.currencortex.music.ui.component.*
 import io.github.currencortex.music.ui.component.nativeui.*
 import io.github.currencortex.music.ui.util.collectAsPageState
@@ -47,7 +48,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     BackHandler(encyclopedia) { encyclopedia = false }
     PreloadMusicCovers(if (tab == "albums") albums.take(10).map { it.cover } else state.songs.take(12).map { it.cover })
     if (encyclopedia) {
-        ArtistEncyclopedia(state, { encyclopedia = false }, { vm.loadBiography() }, vm::loadProfile)
+        ArtistEncyclopedia(state, { encyclopedia = false }, { vm.loadBiography() }, vm::loadProfile,
+            showAudience = vm.qqMid.isNullOrBlank())
         return
     }
     MusicSubpage(state.displayArtist?.name?.ifBlank { "艺人主页" } ?: "艺人主页", "artist_page", onBack, backTag = "artist_back") { topInset ->
@@ -55,7 +57,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             LazyColumn(Modifier.fillMaxSize().testTag("artist_home"), state = scroll,
                 contentPadding = musicScrollPadding(PaddingValues(16.dp, 8.dp, 16.dp, 32.dp)),
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (tab == "home") item("hero") { ArtistHero(state.displayArtist, state.fans) { encyclopedia = true } }
+                if (tab == "home") item("hero") {
+                    ArtistHero(state.displayArtist, state.fans.takeIf { vm.qqMid.isNullOrBlank() }) { encyclopedia = true }
+                }
                 stickyHeader("tabs") {
                     MusicCategoryTabs(listOf("home" to "音乐", "songs" to "歌曲", "albums" to "专辑", "mvs" to "MV"),
                         tab, { tab = it }, "artist_tab", Modifier.background(MiuixTheme.colorScheme.background))
@@ -69,7 +73,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                             vm.container.playerController.setMode(PlaybackMode.LIST); play(playingSongs, 0)
                         }
                     }
-                    if (room != null) item("room") { Text("点击歌曲，为当前房间点歌") }
+                    if (room != null) item("room") { Text("点击歌曲，加入当前一起听") }
                     val visibleSongs = if (tab == "home") hotSongs.take(5) else state.songs
                     itemsIndexed(visibleSongs, key = { _, song -> "song_${song.id}" }) { index, song ->
                         Box(Modifier.testTag("artist_song_${song.id}")) {
@@ -112,7 +116,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                             else if (state.similar.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 items(state.similar, key = { it.id }) { artist ->
                                     MusicArtworkCard(artist.cover, artist.name, artist.subtitle,
-                                        { navigate("lib/artist/${artist.id}") }, Modifier.width(144.dp).testTag("artist_similar_${artist.id}"))
+                                        { navigate(artistRoute(artist)) }, Modifier.width(144.dp).testTag("artist_similar_${artist.id}"))
                                 }
                             } else if (state.similarError == null) ArtistEmpty("暂无相似艺人")
                             state.similarError?.let { ArtistSectionError(it, "重试相似艺人", vm::loadSimilar, state.similarLoading) }

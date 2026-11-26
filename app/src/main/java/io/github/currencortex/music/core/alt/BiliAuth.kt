@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站扫码登录：generate 拿二维码 URL + qrcode_key → 轮询 poll → 成功后 Set-Cookie 存会话。
+// 哔哩哔哩扫码登录：generate 拿二维码 URL + qrcode_key → 轮询 poll → 成功后 Set-Cookie 存会话。
 // 登录后可读 nav（头像/昵称/等级）、收藏夹（当作歌单）、以及「我喜欢」收藏夹。
 package io.github.currencortex.music.core.alt
 
@@ -7,8 +7,11 @@ import android.content.Context
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 object BiliAuth {
     private const val UA =
@@ -107,10 +110,10 @@ object BiliAuth {
         )
     }.getOrNull()
 
-    /** 视频自带字幕 → LRC 文本（需要登录 Cookie，B站对未登录用户不返回字幕列表） */
+    /** 视频自带字幕 → LRC 文本（需要登录 Cookie，哔哩哔哩对未登录用户不返回字幕列表） */
     /**
      * 取视频字幕（含 AI 自动生成）。
-     * 关键点：B站 的 AI 字幕是**懒生成**的——前几次请求会返回空列表，过一两秒再请求才出现。
+     * 关键点：哔哩哔哩 的 AI 字幕是**懒生成**的——前几次请求会返回空列表，过一两秒再请求才出现。
      * 所以这里最多轮询 4 次；另外优先人工中文（zh-CN/zh-Hans），其次 ai-zh，最后英文。
      */
     fun subtitleLrc(cookieHeader: String, bvid: String, cid: String, preferCjk: Boolean = true): String? = runCatching {
@@ -325,12 +328,57 @@ object BiliAuth {
         kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject["code"]?.jsonPrimitive?.content == "0"
     }.getOrDefault(false)
 
-    /** B站 的 csrf/bkn：由 bili_jct 计算（注意收藏接口要原值，这里仅保留算法备用） */
+    /** 哔哩哔哩 的 csrf/bkn：由 bili_jct 计算（注意收藏接口要原值，这里仅保留算法备用） */
     fun bkn(jct: String): String {
         var hash = 5381L
         for (ch in jct) hash += (hash shl 5) + ch.code
         return (hash and 0x7FFFFFFFL).toString()
     }
+
+    /** 哔哩哔哩红心是视频点赞，不是收藏夹。读不到时返回 null，避免把网络失败当成取消喜欢。 */
+    fun isLiked(cookieHeader: String, bvid: String): Boolean? = runCatching {
+        if (!bvid.matches(Regex("[A-Za-z0-9]{8,32}"))) return null
+        val c = open("https://api.bilibili.com/x/web-interface/archive/relation?bvid=$bvid").apply {
+            setRequestProperty("Cookie", cookieHeader)
+            setRequestProperty("Referer", "https://www.bilibili.com/video/$bvid")
+        }
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(
+            c.inputStream.bufferedReader().use { it.readText() }).jsonObject
+        if (root["code"]?.jsonPrimitive?.intOrNull != 0) return null
+        val value = root["data"]?.jsonObject?.get("like") ?: return null
+        value.jsonPrimitive.booleanOrNull ?: when (value.jsonPrimitive.content) {
+            "1", "true" -> true
+            "0", "false" -> false
+            else -> null
+        }
+    }.getOrNull()
+
+    /** 写一次视频点赞接口；平台已接收后用关系接口做短轮询确认。 */
+    fun setLiked(cookieHeader: String, bvid: String, liked: Boolean, csrf: String): Boolean = runCatching {
+        if (!bvid.matches(Regex("[A-Za-z0-9]{8,32}")) || csrf.isBlank()) return false
+        if (isLiked(cookieHeader, bvid) == liked) return true
+        val c = open("https://api.bilibili.com/x/web-interface/archive/like").apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Cookie", cookieHeader)
+            setRequestProperty("Referer", "https://www.bilibili.com/video/$bvid")
+            setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        }
+        val body = "bvid=" + URLEncoder.encode(bvid, "UTF-8") +
+            "&like=" + (if (liked) "1" else "2") +
+            "&csrf=" + URLEncoder.encode(csrf, "UTF-8")
+        c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val text = c.inputStream.bufferedReader().use { it.readText() }
+        val code = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject["code"]
+            ?.jsonPrimitive?.intOrNull
+        if (code != 0) return false
+        repeat(4) { attempt ->
+            if (isLiked(cookieHeader, bvid) == liked) return true
+            if (attempt < 3) Thread.sleep(250)
+        }
+        // API 已明确接收写入。短暂缓存未收敛时保留本地确认，稍后由关系接口纠正。
+        true
+    }.getOrDefault(false)
 
     data class FavFolder(val id: Long, val title: String, val cover: String, val count: Int)
 
@@ -354,7 +402,7 @@ object BiliAuth {
     }.getOrDefault(emptyList())
 }
 
-/** B站的会话（Cookie + 账号信息） */
+/** 哔哩哔哩的会话（Cookie + 账号信息） */
 class BiliSessionStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("prom_bili_session", Context.MODE_PRIVATE)
 

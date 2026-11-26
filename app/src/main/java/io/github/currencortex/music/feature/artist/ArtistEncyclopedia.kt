@@ -20,7 +20,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-@Composable internal fun ArtistEncyclopedia(state: ArtistUiState, onBack: () -> Unit, retry: () -> Unit, retryProfile: () -> Unit) {
+@Composable internal fun ArtistEncyclopedia(state: ArtistUiState, onBack: () -> Unit, retry: () -> Unit,
+    retryProfile: () -> Unit, showAudience: Boolean = true) {
     var tab by rememberSaveable { mutableStateOf("basic") }
     val basicScroll = rememberLazyListState()
     val detailsScroll = rememberLazyListState()
@@ -40,7 +41,7 @@ import java.time.format.DateTimeFormatter
                         Text(artist?.name ?: "艺人", fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
                         if (!artist?.description.isNullOrBlank()) Text(artist.description, fontSize = 13.sp,
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                        state.fans?.let { Text("${artistCount(it.fans)} 粉丝 · ${artistCount(it.follows)} 关注", fontSize = 13.sp,
+                        if (showAudience) state.fans?.let { Text("${artistCount(it.fans)} 粉丝 · ${artistCount(it.follows)} 关注", fontSize = 13.sp,
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary) }
                     }
                 }

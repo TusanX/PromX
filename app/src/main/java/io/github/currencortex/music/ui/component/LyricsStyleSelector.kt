@@ -17,7 +17,7 @@ import io.github.currencortex.music.ui.component.nativeui.SettingsDivider
         LyricsStyle.entries.forEachIndexed { index, option ->
             if (index > 0) SettingsDivider()
             SettingsChoiceRow(option.label, option == style, { onStyle(option) },
-                Modifier.testTag("lyrics_style_${option.name}"))
+                Modifier.testTag("lyrics_style_${option.name}"), summary = option.description)
         }
     }
 }

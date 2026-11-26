@@ -25,7 +25,7 @@ class LyricsRepository(private val ttml: LyricsProvider, private val fallback: L
     private val now: () -> Long = System::currentTimeMillis) {
     /** QQ 音乐直连取词（songmid），由容器在构造后注入 */
     var directQq: (suspend (Song) -> LyricsDocument?)? = null
-    /** B站：直接读视频自带字幕，由容器在构造后注入 */
+    /** 哔哩哔哩：直接读视频自带字幕，由容器在构造后注入 */
     var directBili: (suspend (Song) -> LyricsDocument?)? = null
     private val lock = Mutex()
     private data class MemoryEntry(val result: LyricsResult, val savedAtMillis: Long, val expiresAtMillis: Long?)
@@ -33,7 +33,7 @@ class LyricsRepository(private val ttml: LyricsProvider, private val fallback: L
     suspend fun load(song: Song): LyricsResult = withContext(Dispatchers.IO) { lock.withLock {
         // User-selected files/matches are authoritative, including explicit instrumental results.
         overrides?.active(song)?.takeIf { saved ->
-            // B站 歌曲若之前自动匹配过别处的歌词（旧版本行为），一律忽略，只看视频字幕
+            // 哔哩哔哩 歌曲若之前自动匹配过别处的歌词（旧版本行为），一律忽略，只看视频字幕
             song.musicSource != io.github.currencortex.music.data.song.MusicSource.BILIBILI ||
                 saved.origin.provider == "bilibili" || saved.origin.provider == "user"
         }?.let { saved ->
@@ -52,20 +52,20 @@ class LyricsRepository(private val ttml: LyricsProvider, private val fallback: L
                 return@withLock LyricsResult(it.document, origin = it.origin, sourceDocument = it.document)
             }
         }
-        // B站：优先用视频自带字幕（官方时间轴）
+        // 哔哩哔哩：优先用视频自带字幕（官方时间轴）
         if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
             val direct = try { directBili?.invoke(song) } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                log("B站字幕: ${e.javaClass.simpleName}"); null
+                log("哔哩哔哩字幕: ${e.javaClass.simpleName}"); null
             }
             direct?.takeIf { it.lines.isNotEmpty() }?.let {
-                return@withLock LyricsResult(it, origin = LyricsOrigin("B站字幕", "bilibili"), sourceDocument = it)
+                return@withLock LyricsResult(it, origin = LyricsOrigin("哔哩哔哩字幕", "bilibili"), sourceDocument = it)
             }
-            // B站 视频的字幕只认「视频自己的」，绝不拿别处的匹配歌词冒充：
+            // 哔哩哔哩 视频的字幕只认「视频自己的」，绝不拿别处的匹配歌词冒充：
             // 没有 AI/CC 字幕时就明确返回无歌词，让界面显示「暂无字幕」。
             return@withLock LyricsResult(
                 LyricsDocument(lines = emptyList()),
-                issues = listOf(LyricsIssue(LyricsErrorCode.NO_LYRICS, "B站 视频没有可用字幕")),
-                origin = LyricsOrigin("B站字幕", "bilibili"),
+                issues = listOf(LyricsIssue(LyricsErrorCode.NO_LYRICS, "哔哩哔哩 视频没有可用字幕")),
+                origin = LyricsOrigin("哔哩哔哩字幕", "bilibili"),
             )
         }
         // QQ 音乐模式下直接用 songmid 取官方歌词

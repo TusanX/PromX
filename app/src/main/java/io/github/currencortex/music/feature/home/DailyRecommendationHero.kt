@@ -55,7 +55,7 @@ import kotlinx.coroutines.launch
     songs: List<Song>, loading: Boolean, error: String?, discovery: Boolean,
     playback: PlayerState, onPlay: (Int) -> Unit, onOpen: () -> Unit, onRetry: () -> Unit,
     onConnect: () -> Unit, modifier: Modifier = Modifier, dateLabel: String = "",
-    room: RoomSongRequest? = null,
+    room: RoomSongRequest? = null, sourceLabel: String = "网易云",
 ) {
     val colors = MiuixTheme.colorScheme
     var selectedId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -68,7 +68,7 @@ import kotlinx.coroutines.launch
     val canPlay = selected != null && !requesting
     val primaryLabel = when {
         requesting -> "正在提交点歌"
-        room != null -> "为房间点歌"
+        room != null -> "加入一起听"
         sameSong && playback.showPause -> "暂停推荐歌曲"
         else -> "播放推荐歌曲"
     }
@@ -108,14 +108,14 @@ import kotlinx.coroutines.launch
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(MusicIcons.List, null, Modifier.size(34.dp), tint = colors.primary.copy(alpha = .55f))
                 Text(if (error != null) "推荐暂时没加载出来" else "今日推荐还没有内容", fontSize = 16.sp)
-                Text(error ?: if (discovery) "连接网易云，发现适合你的音乐" else "稍后刷新，再来听点新歌",
+                Text(error ?: if (discovery) "连接$sourceLabel，发现适合你的音乐" else "稍后刷新，再来听点新歌",
                     Modifier.padding(horizontal = 12.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
                     color = colors.onSurface.copy(alpha = .55f))
-                MusicTextAction(if (discovery && error == null) "连接网易云 ›" else "重新加载",
+                MusicTextAction(if (discovery && error == null) "连接$sourceLabel ›" else "重新加载",
                     if (discovery && error == null) onConnect else onRetry, Modifier.testTag("home_daily_retry"))
             }
         }
-        if (discovery && songs.isNotEmpty()) MusicTextAction("连接网易云，获取你的专属推荐 ›", onConnect,
+        if (discovery && songs.isNotEmpty()) MusicTextAction("连接$sourceLabel，获取你的专属推荐 ›", onConnect,
             Modifier.align(Alignment.CenterHorizontally).testTag("home_connect_netease"))
     }
 }

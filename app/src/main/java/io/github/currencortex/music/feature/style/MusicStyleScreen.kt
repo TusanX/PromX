@@ -202,7 +202,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                     StyleAction("最新", { vm.sort(1) }, Modifier.testTag("style_sort_new"), active = state.sort == 1)
                 }
             }
-            if (room != null) item { Text("点击歌曲，为当前房间点歌", fontSize = 13.sp) }
+            if (room != null) item { Text("点击歌曲，加入当前一起听", fontSize = 13.sp) }
             if (state.loading && state.songs.isEmpty()) item { LoadingSongList(5) }
             state.error?.let { error -> item {
                 Text(error, fontSize = 14.sp)

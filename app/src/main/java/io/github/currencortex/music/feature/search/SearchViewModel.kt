@@ -189,8 +189,8 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         val before = state.value
         if (before.searched && !before.loading) load(before.category, append = before.page.loaded && before.more)
     }
-    /** 把设置里选中的备用音源（QQ / B站）并入原生搜索结果，和网易云结果同一列表 */
-    /** 输入 BV 号时直接取这条视频（B站 搜索接口不支持按 BV 搜） */
+    /** 把设置里选中的备用音源（QQ / 哔哩哔哩）并入原生搜索结果，和网易云结果同一列表 */
+    /** 输入 BV 号时直接取这条视频（哔哩哔哩 搜索接口不支持按 BV 搜） */
     private suspend fun directBvSong(query: String): Song? {
         val bvid = query.trim()
         if (!Regex("^BV[0-9A-Za-z]{10}$").matches(bvid)) return null
@@ -231,7 +231,10 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
                     val bvid = o["bvid"]?.jsonPrimitive?.content ?: return@mapNotNull null
                     val duration = o["duration"]?.jsonPrimitive?.content
                     Song(id = bvid.hashCode().toLong().let { if (it < 0) -it else it },
-                        name = (o["title"]?.jsonPrimitive?.content ?: "").replace(Regex("<[^>]+>"), ""),
+                        name = (o["title"]?.jsonPrimitive?.content ?: "")
+                            .replace(Regex("<[^>]+>"), "")
+                            .replace("&amp;", "&").replace("&quot;", "\"")
+                            .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"),
                         artists = (o["author"]?.jsonPrimitive?.content ?: "") + " · 哔哩哔哩",
                         cover = (o["pic"]?.jsonPrimitive?.content ?: "").let {
                             if (it.startsWith("//")) "https:$it" else it

@@ -15,7 +15,7 @@ internal data class SongShareContent(val title: String, val artists: String, val
             // IDs from other sources and private Navidrome credentials are never public song URLs.
             val id = if (!song.video && song.musicSource == MusicSource.NETEASE && song.navidrome == null && song.emby == null)
                 (song.externalIds.neteaseId?.toLongOrNull() ?: song.id).takeIf { it > 0 } else null
-            // B站：直接给视频页链接，任何设备都能打开
+            // 哔哩哔哩：直接给视频页链接，任何设备都能打开
             val bili = song.externalIds.bilibiliBvid?.takeIf { it.isNotBlank() }
             val url = when {
                 bili != null -> "https://www.bilibili.com/video/$bili"

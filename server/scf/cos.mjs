@@ -8,19 +8,21 @@ const hmac1 = (k, s) => crypto.createHmac('sha1', k).update(s).digest('hex');
 const objPath = (key) => `/${key.split('/').map(encodeURIComponent).join('/')}`;
 
 /** headers: { 'content-type': 'application/json' } 之类，会被一起签名 */
-function auth(method, path, headers) {
+function auth(method, path, headers, query = {}) {
   const now = Math.floor(Date.now() / 1000);
   const keyTime = `${now};${now + 900}`;
   const signKey = hmac1(SK, keyTime);
   const all = { host: host(), ...headers };
   const keys = Object.keys(all).map((k) => k.toLowerCase()).sort();
   const headerString = keys.map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(all[k]))}`).join('&');
-  const httpString = `${method.toLowerCase()}\n${path}\n\n${headerString}\n`;
+  const queryKeys = Object.keys(query).map((k) => k.toLowerCase()).sort();
+  const queryString = queryKeys.map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(query[k]))}`).join('&');
+  const httpString = `${method.toLowerCase()}\n${path}\n${queryString}\n${headerString}\n`;
   const stringToSign = `sha1\n${keyTime}\n${sha1(httpString)}\n`;
   const signature = hmac1(signKey, stringToSign);
   return {
     authorization: `q-sign-algorithm=sha1&q-ak=${SID}&q-sign-time=${keyTime}&q-key-time=${keyTime}` +
-      `&q-header-list=${keys.join(';')}&q-url-param-list=&q-signature=${signature}`,
+      `&q-header-list=${keys.join(';')}&q-url-param-list=${queryKeys.join(';')}&q-signature=${signature}`,
     ...all,
   };
 }
@@ -40,4 +42,28 @@ export async function putObj(key, data) {
   const r = await fetch(`https://${host()}${p}`, { method: 'PUT', headers: h, body: JSON.stringify(data) });
   if (!r.ok) throw new Error(`COS PUT ${r.status} ${(await r.text().catch(() => '')).slice(0, 160)}`);
   return true;
+}
+
+const decodeXml = (value) => String(value)
+  .replaceAll('&amp;', '&').replaceAll('&lt;', '<').replaceAll('&gt;', '>')
+  .replaceAll('&quot;', '"').replaceAll('&apos;', "'");
+
+const values = (xml, tag) => [...xml.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))]
+  .map((match) => decodeXml(match[1]));
+
+/** List COS objects. Returns keys ordered by COS lexicographical order. */
+export async function listObjects(prefix, marker = '') {
+  const query = { prefix, 'max-keys': '1000' };
+  if (marker) query.marker = marker;
+  const h = auth('get', '/', {}, query);
+  const search = new URLSearchParams(query).toString();
+  const r = await fetch(`https://${host()}/?${search}`, { headers: h });
+  if (!r.ok) throw new Error(`COS LIST ${r.status}`);
+  const xml = await r.text();
+  const keys = values(xml, 'Key');
+  return {
+    keys,
+    isTruncated: /<IsTruncated>true<\/IsTruncated>/i.test(xml),
+    nextMarker: decodeXml(values(xml, 'NextMarker')[0] || keys.at(-1) || ''),
+  };
 }

@@ -67,7 +67,7 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
 
     /** 按歌曲来源分派：QQ 音乐走自己的评论接口（无需登录） */
     suspend fun comments(song: Song, sort: CommentSort, page: Int = 1): SongCommentsPage {
-        // B站：按 aid 查视频评论（type=1）
+        // 哔哩哔哩：按 aid 查视频评论（type=1）
         if (song.musicSource == MusicSource.BILIBILI) {
             val bili = biliSession?.invoke()
             val cookie = bili?.takeIf { it.loggedIn }?.cookieHeader().orEmpty()
@@ -163,14 +163,14 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
     suspend fun send(song: Song, content: String, replyTo: String? = null) {
         if (song.musicSource == MusicSource.BILIBILI) {
             val bili = biliSession?.invoke()?.takeIf { it.loggedIn }
-                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 B站")
+                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 哔哩哔哩")
             val cookie = bili.cookieHeader()
             val aid = biliAid(song, cookie) ?: throw ApiException(ErrorKind.NotFound)
             val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 io.github.currencortex.music.core.alt.BiliPlayback.sendComment(
                     aid, content, replyTo, cookie, bili.cookies["bili_jct"].orEmpty())
             }
-            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "B站评论发送失败")
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "哔哩哔哩评论发送失败")
             return
         }
         if (song.musicSource != MusicSource.QQ_MUSIC) {
@@ -192,14 +192,14 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
     suspend fun like(song: Song, commentId: String, liked: Boolean) {
         if (song.musicSource == MusicSource.BILIBILI) {
             val bili = biliSession?.invoke()?.takeIf { it.loggedIn }
-                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 B站")
+                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 哔哩哔哩")
             val cookie = bili.cookieHeader()
             val aid = biliAid(song, cookie) ?: throw ApiException(ErrorKind.NotFound)
             val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 io.github.currencortex.music.core.alt.BiliPlayback.likeComment(
                     aid, commentId, liked, cookie, bili.cookies["bili_jct"].orEmpty())
             }
-            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "B站评论点赞失败")
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "哔哩哔哩评论点赞失败")
             return
         }
         if (song.musicSource != MusicSource.QQ_MUSIC) {
@@ -218,14 +218,14 @@ class SongCommentsRepository(private val api: ApiClient, private val session: ()
     suspend fun delete(song: Song, commentId: String) {
         if (song.musicSource == MusicSource.BILIBILI) {
             val bili = biliSession?.invoke()?.takeIf { it.loggedIn }
-                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 B站")
+                ?: throw ApiException(ErrorKind.Unauthorized, userMessage = "请先登录 哔哩哔哩")
             val cookie = bili.cookieHeader()
             val aid = biliAid(song, cookie) ?: throw ApiException(ErrorKind.NotFound)
             val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 io.github.currencortex.music.core.alt.BiliPlayback.deleteComment(
                     aid, commentId, cookie, bili.cookies["bili_jct"].orEmpty())
             }
-            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "B站评论删除失败")
+            if (!ok) throw ApiException(ErrorKind.Server, userMessage = "哔哩哔哩评论删除失败")
             return
         }
         if (song.musicSource != MusicSource.QQ_MUSIC) {

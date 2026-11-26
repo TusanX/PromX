@@ -6,12 +6,16 @@
 .DS_Store
 **/build/
 **/node_modules/
+/output/
+/.playwright-cli/
 __pycache__/
 *.pyc
 /captures
 .externalNativeBuild
 .cxx
 keystore.properties
+.tencent-cloud.env
+.download-admin-token
 *.jks
 *.keystore
 /.verification/
@@ -58,3 +62,9 @@ keystore.properties
 /baselineprofile/
 /app/src/performance/
 /scripts/Test-*
+
+# Tencent Cloud EdgeOne
+.env
+.tencent-cloud.env
+.edgeone/*
+.tef_dist/*

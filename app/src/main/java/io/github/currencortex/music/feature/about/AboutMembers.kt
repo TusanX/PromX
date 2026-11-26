@@ -2,6 +2,7 @@
 package io.github.currencortex.music.feature.about
 
 import io.github.currencortex.music.ui.component.MusicDialogButton
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
@@ -55,13 +56,24 @@ private object QqAvatarCache {
         "https://thirdqq.qlogo.cn/g?b=qq&nk=%s&s=%d",
         "https://q1.qlogo.cn/headimg_dl?dstuin=%s&spec=%d",
     )
-    suspend fun load(qq: String, spec: Int = 100): Bitmap? {
-        val key = "$qq@$spec"
+    suspend fun load(context: Context, qq: String, avatarUrl: String? = null,
+        avatarRes: Int? = null, spec: Int = 100): Bitmap? {
+        val key = when {
+            avatarRes != null -> "res:$avatarRes@$spec"
+            avatarUrl.isNullOrBlank() -> "qq:$qq@$spec"
+            else -> "url:$avatarUrl@$spec"
+        }
         cache.get(key)?.let { return it }
         return withContext(Dispatchers.IO) {
-            endpoints.firstNotNullOfOrNull { pattern ->
+            if (avatarRes != null) {
+                return@withContext BitmapFactory.decodeResource(context.resources, avatarRes)
+                    ?.also { cache.put(key, it) }
+            }
+            val urls = if (avatarUrl.isNullOrBlank()) endpoints.map { it.format(qq, spec) }
+                else listOf(if (avatarUrl.contains("%d")) avatarUrl.format(spec) else avatarUrl)
+            urls.firstNotNullOfOrNull { url ->
                 try {
-                    val connection = URL(pattern.format(qq, spec)).openConnection() as HttpURLConnection
+                    val connection = URL(url).openConnection() as HttpURLConnection
                     connection.connectTimeout = 5000
                     connection.readTimeout = 5000
                     connection.setRequestProperty("User-Agent",
@@ -79,14 +91,19 @@ private object QqAvatarCache {
 }
 
 @Composable
-internal fun QqAvatar(qq: String, size: Dp = 44.dp, spec: Int = 100, modifier: Modifier = Modifier) {
-    val bitmap by produceState<Bitmap?>(null, qq, spec) { value = QqAvatarCache.load(qq, spec) }
+internal fun QqAvatar(qq: String, size: Dp = 44.dp, spec: Int = 100, modifier: Modifier = Modifier,
+    avatarUrl: String? = null, avatarRes: Int? = null, name: String = "") {
+    val context = LocalContext.current
+    val bitmap by produceState<Bitmap?>(null, qq, avatarUrl, avatarRes, spec) {
+        value = QqAvatarCache.load(context, qq, avatarUrl, avatarRes, spec)
+    }
     Box(modifier.size(size).clip(CircleShape)
         .background(colorScheme.onSurface.copy(alpha = 0.06f)), contentAlignment = Alignment.Center) {
         val loaded = bitmap
         if (loaded != null) Image(loaded.asImageBitmap(), contentDescription = null,
             contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-        else Text(qq.takeLast(2), fontSize = (size.value * 0.27f).sp, color = colorScheme.onSurfaceVariantSummary)
+        else Text(qq.takeLast(2).ifBlank { name.take(1).uppercase() }, fontSize = (size.value * 0.27f).sp,
+            color = colorScheme.onSurfaceVariantSummary)
     }
 }
 
@@ -95,7 +112,8 @@ internal fun MemberRow(member: AboutMember, onClick: () -> Unit) {
     BasicComponent(
         title = member.name,
         summary = member.role,
-        startAction = { QqAvatar(member.qq, modifier = Modifier.padding(end = 6.dp)) },
+        startAction = { QqAvatar(member.qq, modifier = Modifier.padding(end = 6.dp),
+            avatarUrl = member.avatarUrl, avatarRes = member.avatarRes, name = member.name) },
         endActions = {
             // 与下方链接行同一箭头，提示这一行可以点开。
             Image(
@@ -176,7 +194,9 @@ internal fun MemberDetailDialog(show: Boolean, focus: MemberFocus?, onDismiss: (
         Column(Modifier.fillMaxWidth().heightIn(max = contentHeight).testTag("member_dialog_content")) {
             focus?.let { current ->
                 Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    QqAvatar(current.member.qq, size = 76.dp, spec = 640)
+                    QqAvatar(current.member.qq, size = 76.dp, spec = 640,
+                        avatarUrl = current.member.avatarUrl, avatarRes = current.member.avatarRes,
+                        name = current.member.name)
                     Text(current.member.name, fontSize = 20.sp, fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 12.dp))
                     Text(current.group, fontSize = 13.sp, color = colorScheme.onSurfaceVariantSummary,

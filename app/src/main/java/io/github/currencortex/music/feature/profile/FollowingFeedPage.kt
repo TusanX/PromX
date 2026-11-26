@@ -38,6 +38,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import io.github.currencortex.music.data.library.ArtistRelease
 import io.github.currencortex.music.data.library.FollowedArtist
+import io.github.currencortex.music.feature.library.albumRoute
 import io.github.currencortex.music.ui.component.LocalMusicBottomInset
 import io.github.currencortex.music.ui.component.LoadingSongList
 import io.github.currencortex.music.ui.component.MusicPullToRefresh
@@ -58,6 +59,9 @@ private val releaseDate = DateTimeFormatter.ofPattern("yyyy.MM.dd")
 internal fun FollowingFeedPage(vm: FollowingViewModel, navigate: (String) -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     val account by vm.container.neteaseSessions.state.collectAsStateWithLifecycle()
+    val qq = state.source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC
+    val bili = state.source == io.github.currencortex.music.data.song.MusicSource.BILIBILI
+    val signedIn = if (qq) vm.container.qqSession.loggedIn else if (bili) false else account.loggedIn && !account.stale
     val bottom = LocalMusicBottomInset.current
     MusicPullToRefresh(state.loading && state.artists.isNotEmpty(), vm::reload, Modifier.fillMaxSize()) {
         LazyColumn(
@@ -67,21 +71,35 @@ internal fun FollowingFeedPage(vm: FollowingViewModel, navigate: (String) -> Uni
         ) {
             item("following_intro") {
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("网易云关注动态", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text(if (qq) "QQ 音乐关注动态" else if (bili) "哔哩哔哩关注动态" else "网易云关注动态",
+                        fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                     Text("关注音乐人的新专辑、单曲与近期发布", fontSize = 13.sp,
                         color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
                 }
             }
 
-            if (!account.loggedIn || account.stale) {
+            if (bili) {
+                item("following_bili_empty") {
+                    SettingsGroup {
+                        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("哔哩哔哩关注歌手上新", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                            Text("当前账号数据尚未同步到关注歌手页面；这里不会显示网易云关注内容。",
+                                fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
+                        }
+                    }
+                }
+                return@LazyColumn
+            }
+            if (!signedIn) {
                 item("following_login") {
                     SettingsGroup {
                         Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(if (account.stale) "网易云登录已失效" else "连接网易云音乐",
+                            Text(if (!qq && account.stale) "网易云登录已失效" else if (qq) "连接 QQ 音乐" else "连接网易云音乐",
                                 fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                             Text("登录后可查看你关注的音乐人和他们最近发布的内容。", fontSize = 13.sp,
                                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .58f))
-                            MusicTextAction("去连接网易云", { navigate("user/binding") }, Modifier.testTag("following_login_action"))
+                            MusicTextAction(if (qq) "去连接 QQ 音乐" else "去连接网易云",
+                                { navigate(if (qq) "qq/login" else "user/binding") }, Modifier.testTag("following_login_action"))
                         }
                     }
                 }
@@ -106,7 +124,8 @@ internal fun FollowingFeedPage(vm: FollowingViewModel, navigate: (String) -> Uni
                     SettingsGroup {
                         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("还没有关注音乐人", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                            Text("在网易云音乐关注喜欢的音乐人后，他们的新作品会出现在这里。", fontSize = 13.sp,
+                            Text(if (qq) "在 QQ 音乐关注喜欢的歌手后，他们的新作品会出现在这里。" else
+                                "在网易云音乐关注喜欢的音乐人后，他们的新作品会出现在这里。", fontSize = 13.sp,
                                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
                         }
                     }
@@ -124,7 +143,10 @@ internal fun FollowingFeedPage(vm: FollowingViewModel, navigate: (String) -> Uni
                 item("following_artists") {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         items(state.artists, key = { "following_artist_${it.id}" }) { artist ->
-                            FollowedArtistItem(artist) { navigate("lib/artist/${artist.id}") }
+                            FollowedArtistItem(artist) {
+                                navigate(if (qq && artist.remoteKey.isNotBlank()) "lib/qq/artist/${artist.remoteKey}"
+                                else "lib/artist/${artist.id}")
+                            }
                         }
                     }
                 }
@@ -135,7 +157,7 @@ internal fun FollowingFeedPage(vm: FollowingViewModel, navigate: (String) -> Uni
                 itemsIndexed(state.releases.chunked(2), key = { index, _ -> "following_release_row_$index" }) { _, row ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         row.forEach { release ->
-                            ReleaseCard(release, Modifier.weight(1f)) { navigate("lib/album/${release.album.id}") }
+                            ReleaseCard(release, Modifier.weight(1f)) { navigate(albumRoute(release.album)) }
                         }
                         if (row.size == 1) Spacer(Modifier.weight(1f))
                     }

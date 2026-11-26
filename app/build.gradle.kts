@@ -55,8 +55,8 @@ android {
         }
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
         targetSdk = 36
-        versionCode = 63
-        versionName = "1.6.4"
+        versionCode = 81
+        versionName = "1.6.22"
         versionCode = requireNotNull(versionCode) * 100_000 + ciBuildNumber
         if (ciBuildNumber > 0) versionName = "$versionName-ci.$ciBuildNumber"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -187,6 +187,7 @@ dependencies {
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.javascriptengine:javascriptengine:1.1.1")
+    implementation("androidx.webkit:webkit:1.14.0")
     implementation("org.mozilla:rhino:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")

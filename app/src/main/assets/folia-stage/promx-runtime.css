@@ -1,0 +1,50 @@
+html,
+body,
+#root,
+.promx-stage-root {
+  height: var(--promx-viewport-height, 100vh) !important;
+  min-height: var(--promx-viewport-height, 100vh) !important;
+}
+
+/* Older Android WebView releases resolve fixed containers inside a paint-contained
+   zero-height root to zero as well. Let the viewport-sized root define the stage. */
+#root,
+.promx-stage-root {
+  contain: none !important;
+}
+
+#root,
+.promx-stage-root {
+  contain: layout paint;
+}
+
+[data-visualizer-background],
+[data-visualizer-style] {
+  contain: layout paint;
+}
+
+canvas {
+  contain: layout paint;
+}
+
+html[data-promx-quality="balanced"] *,
+html[data-promx-quality="saver"] * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-promx-quality="saver"] [data-visualizer-background] *,
+html[data-promx-quality="saver"] [data-visualizer-style] * {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+html[data-promx-quality="saver"] [data-visualizer-background] {
+  opacity: .96;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .visualizer-comes-up {
+    animation: none !important;
+  }
+}

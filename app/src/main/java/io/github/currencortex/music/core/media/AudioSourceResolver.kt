@@ -52,16 +52,37 @@ class AudioSourceResolver(private val cache: AudioCache, private val currentSess
         return ResolvedAudio(entry.source, entry.cacheKey, (remainingMs - advanceMs).coerceAtLeast(250))
     }
     suspend fun resolve(request: AudioRequest, refresh: Boolean = false): ResolvedAudio = withContext(Dispatchers.IO) {
+        // Public radio is stored in the queue as a local-source Song with its remote stream URL.
+        // Restore, next/previous and retry must resolve it directly and must never run the local-file
+        // URI validator or try to cache an endless stream as a complete song.
+        request.song?.takeIf {
+            it.musicSource == io.github.currencortex.music.data.song.MusicSource.LOCAL &&
+                (it.localUri.startsWith("https://") || it.localUri.startsWith("http://"))
+        }?.let { song ->
+            return@withContext ResolvedAudio(
+                AudioSource(song.localUri, "网络电台", 0, 0, source = "radio-browser", validForSeconds = 300),
+                key = "",
+                refreshAfterMs = Long.MAX_VALUE,
+            )
+        }
         // 本地缓存文件优先：不管是哪个来源，只要给了 file:// 就直接读本地，避免走网络
         request.song?.takeIf { it.localUri.startsWith("file://") }?.let { song ->
             val uri = android.net.Uri.parse(song.localUri)
             runCatching { cache.validateLocalUri(uri) }
-            return@withContext ResolvedAudio(AudioSource(uri.toString(), "cached", 0, 0), "", Long.MAX_VALUE)
+            return@withContext ResolvedAudio(
+                AudioSource(uri.toString(), "cached", 0, 0, source = "cached"),
+                "",
+                Long.MAX_VALUE,
+            )
         }
         request.song?.takeIf { it.musicSource == io.github.currencortex.music.data.song.MusicSource.LOCAL }?.let { song ->
             val uri = android.net.Uri.parse(song.localUri)
             cache.validateLocalUri(uri)
-            return@withContext ResolvedAudio(AudioSource(uri.toString(), "local", 0, 0), "", Long.MAX_VALUE)
+            return@withContext ResolvedAudio(
+                AudioSource(uri.toString(), "local", 0, 0, source = "local"),
+                "",
+                Long.MAX_VALUE,
+            )
         }
         checkRequest(request)
         val key = request.key

@@ -31,16 +31,31 @@ fun SettingsScreen(onAppearance: () -> Unit, onNetwork: () -> Unit,
                    onPlayback: () -> Unit = {}, onEffects: () -> Unit = {},
                    updateTransfer: io.github.currencortex.music.core.update.UpdateTransferState = io.github.currencortex.music.core.update.UpdateTransferState(),
                    onNavigateFrom: ((PageContainerOrigin, () -> Unit) -> Unit)? = null,
-                   onBack: (() -> Unit)? = null, onSupport: () -> Unit = {}) {
+                   onBack: (() -> Unit)? = null, onSupport: () -> Unit = {},
+                   bilibiliMode: Boolean = false, onBiliLogin: () -> Unit = {},
+                   onBiliMessages: () -> Unit = {}, onBiliDownloads: () -> Unit = {}) {
     CompositionLocalProvider(LocalPageContainerSource provides (onNavigateFrom ?: LocalPageContainerSource.current)) {
     SettingsUiScope {
     SettingsScrollLayout(Modifier.fillMaxSize(), topBar = {
-        if (onBack == null) SettingsRootTopBar("设置", Modifier.testTag("settings_root_toolbar"))
-        else SettingsTopBar("设置", onBack, tag = "settings_root_toolbar")
+        val title = if (bilibiliMode) "哔哩哔哩设置" else "设置"
+        if (onBack == null) SettingsRootTopBar(title, Modifier.testTag("settings_root_toolbar"))
+        else SettingsTopBar(title, onBack, tag = "settings_root_toolbar")
     }) { topInset ->
     LazyColumn(Modifier.fillMaxSize().testTag("settings_screen"),
         contentPadding = musicScrollPadding(PaddingValues(16.dp, topInset + 24.dp, 16.dp, 20.dp))) {
         rootMotionItems {
+        if (bilibiliMode) item {
+            SettingsListSection("哔哩哔哩") {
+                SettingsPagePreference("账号连接", "扫码登录，同步账号、收藏、历史与稍后再看", MusicIcons.Account,
+                    "open_bili_login", onBiliLogin)
+                SettingsDivider(52.dp)
+                SettingsPagePreference("消息中心", "回复、@我、点赞与系统通知", MusicIcons.Comment,
+                    "open_bili_messages", onBiliMessages)
+                SettingsDivider(52.dp)
+                SettingsPagePreference("离线内容", "管理哔哩哔哩视频下载与本地缓存", MusicIcons.Download,
+                    "open_bili_downloads", onBiliDownloads)
+            }
+        }
         item {
             var origin by remember { mutableStateOf<LayoutCoordinates?>(null) }
             val sourceLayer = rememberGraphicsLayer()

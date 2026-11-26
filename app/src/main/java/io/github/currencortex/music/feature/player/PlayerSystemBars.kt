@@ -13,14 +13,16 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /** The status bar belongs to this player only; exiting or rotating restores its prior state. */
-@Composable internal fun PlayerSystemBars(immersive: Boolean) {
+@Composable internal fun PlayerSystemBars(immersive: Boolean, hideNavigation: Boolean = false) {
     val window = LocalActivity.current?.window
     val view = LocalView.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(window, view, lifecycle, immersive) {
+    DisposableEffect(window, view, lifecycle, immersive, hideNavigation) {
         if (window == null || !immersive) return@DisposableEffect onDispose {}
         val controller = WindowCompat.getInsetsController(window, view)
-        val bars = WindowInsetsCompat.Type.statusBars()
+        val bars = if (hideNavigation) {
+            WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars()
+        } else WindowInsetsCompat.Type.statusBars()
         val wasVisible = ViewCompat.getRootWindowInsets(view)?.isVisible(bars) != false
         val behavior = controller.systemBarsBehavior
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE

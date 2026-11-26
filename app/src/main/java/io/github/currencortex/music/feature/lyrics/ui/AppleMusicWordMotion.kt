@@ -30,6 +30,7 @@ internal fun appleWordLiftEm(now: Long, start: Long, end: Long, speed: Float = 1
 /** AMLL emphasizes CJK cues and short non-CJK words, without changing their source timing. */
 @Suppress("UNUSED_PARAMETER")
 internal fun appleSustainedWord(text: String, start: Long, end: Long, roles: List<String> = emptyList()): Boolean {
+    if (roles.any { it.equals("chorus", true) || it.equals("x-chorus", true) || it.equals("emphasis", true) }) return true
     val duration = end.toDouble() - start
     if (duration < 1000 || text.isBlank()) return false
     return text.any { it in '\u3400'..'\u9fff' || it in '\u3040'..'\u30ff' || it in '\uac00'..'\ud7af' } ||

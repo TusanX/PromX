@@ -10,9 +10,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -23,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -38,6 +41,10 @@ import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import top.yukonga.miuix.kmp.basic.Text
 import io.github.currencortex.music.data.song.formatNeteaseCount
+import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 internal data class PlayerButtonVisual(val pressed: Boolean, val scale: Float, val glyphProgress: Float, val alpha: Float)
 internal val PlayerButtonVisuals = SemanticsPropertyKey<PlayerButtonVisual>("PlayerButtonVisuals")
@@ -71,7 +78,7 @@ internal data class TransportOverride(
 @Composable internal fun PlayerTransport(vm: PlayerViewModel, onToggle: () -> Unit,
     compact: Boolean = false, quality: (@Composable () -> Unit)? = null,
     leadingAction: (@Composable () -> Unit)? = null, trailingAction: (@Composable () -> Unit)? = null,
-    override: TransportOverride? = null) {
+    override: TransportOverride? = null, onSeekInteraction: (Boolean) -> Unit = {}) {
     val state by vm.state.collectAsStateWithLifecycle()
     val queue by vm.queue.collectAsStateWithLifecycle()
     val actions by vm.actions.collectAsStateWithLifecycle()
@@ -90,7 +97,8 @@ internal data class TransportOverride(
                     drag = null
                 }, { drag = null },
                 bufferedValue = if (override != null) 0f
-                else if (state.song?.id == queue.current?.id) state.bufferedProgress(knownDuration) else 0f) }
+                else if (state.song?.id == queue.current?.id) state.bufferedProgress(knownDuration) else 0f,
+                onInteractionChange = onSeekInteraction) }
             Box(Modifier.fillMaxWidth()) {
                 Text(formatPlayerTime(position), Modifier.align(Alignment.CenterStart),
                     fontSize = 11.sp, color = Color.White.copy(alpha = .48f))
@@ -135,10 +143,12 @@ internal data class TransportOverride(
 }
 
 @Composable internal fun PlayerSeekBar(value: Float, enabled: Boolean, onPreview: (Float) -> Unit,
-    onSeek: (Float) -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier, bufferedValue: Float = 0f) {
+    onSeek: (Float) -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier, bufferedValue: Float = 0f,
+    onInteractionChange: (Boolean) -> Unit = {}) {
     val preview by rememberUpdatedState(onPreview)
     val seek by rememberUpdatedState(onSeek)
     val cancel by rememberUpdatedState(onCancel)
+    val interactionChange by rememberUpdatedState(onInteractionChange)
     val progress = value.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
     val currentProgress by rememberUpdatedState(progress)
     val buffer = bufferedValue.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
@@ -161,7 +171,9 @@ internal data class TransportOverride(
     }.pointerInput(enabled, bounds) {
         if (!enabled || size.width <= 0) return@pointerInput
         awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
+            // Claim horizontal movement in Initial before the pager and side-page detectors
+            // receive the same event. A stationary tap remains available to direct seeking.
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             if (down.isConsumed) return@awaitEachGesture
             val width = size.width.toFloat()
             val initial = currentProgress
@@ -170,11 +182,12 @@ internal data class TransportOverride(
             var committed = false
             pressed = true
             target = initial
+            interactionChange(true)
             // Freeze the preview where playback was when the finger landed, never at the touch X.
             preview(target)
             try {
                 while (true) {
-                    val event = awaitPointerEvent()
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                     if (change.isConsumed || event.changes.any { it.id != down.id && it.pressed }) break
                     val dx = change.position.x - down.position.x
@@ -196,6 +209,7 @@ internal data class TransportOverride(
                         if (kotlin.math.abs(dx) > slop) {
                             dragging = true
                             target = (initial + dx / width).coerceIn(0f, 1f)
+                            change.consume()
                         } else if (change.position.x !in 0f..width || change.position.y !in 0f..size.height.toFloat()) break
                     } else {
                         // Accumulate clamped deltas so reversing at either edge responds immediately.
@@ -211,6 +225,7 @@ internal data class TransportOverride(
                 // Also runs on disable, a new track, rotation or disposal of the player.
                 pressed = false
                 dragging = false
+                interactionChange(false)
                 if (!committed) cancel()
             }
         }
@@ -259,7 +274,8 @@ internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, 
 
 @Composable internal fun PlayerIconButton(icon: PlayerIcon, label: String, onClick: () -> Unit,
     modifier: Modifier = Modifier, selected: Boolean = false, count: Long? = null, showCount: Boolean = false,
-    enabled: Boolean = true, loading: Boolean = false, onLongClick: (() -> Unit)? = null) {
+    enabled: Boolean = true, loading: Boolean = false, onLongClick: (() -> Unit)? = null,
+    onLongClickLabel: String = "更多操作", longPressHint: Boolean = false) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
     val scale = animateFloatAsState(if (pressed && enabled) .88f else 1f,
@@ -267,16 +283,43 @@ internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, 
     val opacity = animateFloatAsState(if (selected) 1f else .65f, tween(160), label = "player action selection")
     val rotation = if (loading) rememberInfiniteTransition(label = "action loading").animateFloat(0f, 360f,
         infiniteRepeatable(tween(900, easing = LinearEasing)), label = "action spinner").value else 0f
-    Box(modifier.size(48.dp).combinedClickable(enabled = enabled, role = Role.Button, interactionSource = interactions,
-        indication = null, onClick = onClick, onLongClick = onLongClick,
-        onLongClickLabel = if (onLongClick != null) "选择其他歌单" else null).semantics {
+    val longPressHintProgress = remember { Animatable(0f) }
+    LaunchedEffect(longPressHint, enabled, onLongClick != null) {
+        if (!longPressHint || !enabled || onLongClick == null) {
+            longPressHintProgress.snapTo(0f)
+            return@LaunchedEffect
+        }
+        longPressHintProgress.snapTo(0f)
+        delay(850)
+        longPressHintProgress.animateTo(1f, tween(980, easing = FastOutSlowInEasing))
+        delay(420)
+        longPressHintProgress.animateTo(0f, tween(520, easing = FastOutSlowInEasing))
+    }
+    val interactionModifier = if (onLongClick == null)
+        Modifier.clickable(enabled = enabled, role = Role.Button, interactionSource = interactions,
+            indication = null, onClick = onClick)
+    else Modifier.combinedClickable(enabled = enabled, role = Role.Button, interactionSource = interactions,
+        indication = null, onClick = onClick, onLongClick = onLongClick, onLongClickLabel = onLongClickLabel)
+    Box(modifier.size(48.dp).then(interactionModifier).semantics {
             contentDescription = label + if (count != null) "，数量 $count" else ""; this.selected = selected
             if (!enabled) disabled()
             this[PlayerButtonVisuals] = PlayerButtonVisual(pressed, scale.value, 0f, opacity.value)
         }, contentAlignment = Alignment.Center) {
+        if (longPressHintProgress.value > .001f) Canvas(Modifier.size(42.dp)) {
+            val hint = longPressHintProgress.value
+            // A single soft halo communicates the hold affordance without a progress
+            // arc, countdown, spinner or repeated attention-seeking loop.
+            drawRoundRect(
+                color = Color.White.copy(alpha = .06f + .045f * sin(hint * PI).toFloat()),
+                cornerRadius = CornerRadius(13.dp.toPx()),
+            )
+        }
         val ink = (if (icon == PlayerIcon.LIKE && selected) Color(0xFFFF647C) else Color.White)
             .copy(alpha = opacity.value * if (enabled) 1f else .4f)
-        val iconModifier = Modifier.size(24.dp).graphicsLayer { scaleX = scale.value; scaleY = scaleX }
+        val hintScale = 1f + .035f * sin(longPressHintProgress.value * PI).toFloat()
+        val iconModifier = Modifier.size(24.dp).graphicsLayer {
+            scaleX = scale.value * hintScale; scaleY = scaleX
+        }
         if (loading) Canvas(iconModifier) {
             drawArc(ink, rotation, 270f, false, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
         } else Image(painterResource(when (icon) {
@@ -296,7 +339,7 @@ internal enum class PlayerIcon { COLLAPSE, MORE, SHARE, EFFECTS, LYRICS, QUEUE, 
             PlayerIcon.VIDEO -> R.drawable.player_symbol_smart_display
             PlayerIcon.DOWNLOAD -> R.drawable.player_symbol_download
         }), null, iconModifier, colorFilter = ColorFilter.tint(ink))
-        // 计数放在图标下方：四位数的 B站 收藏数在右上角会压住图标
+        // 计数放在图标下方：四位数的 哔哩哔哩 收藏数在右上角会压住图标
         if (showCount) Text(count?.let(::formatNeteaseCount) ?: "", fontSize = 9.sp,
             color = Color.White.copy(alpha = .72f), maxLines = 1,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 1.dp)

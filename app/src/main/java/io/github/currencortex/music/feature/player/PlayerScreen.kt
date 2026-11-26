@@ -12,7 +12,9 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -22,7 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -42,6 +46,7 @@ import io.github.currencortex.music.feature.lyrics.ui.*
 import io.github.currencortex.music.data.settings.LyricsWeight
 import io.github.currencortex.music.data.settings.KaraokeScope
 import io.github.currencortex.music.data.settings.LyricsStyle
+import io.github.currencortex.music.data.settings.LyricsRenderQuality
 import io.github.currencortex.music.ui.component.*
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -53,7 +58,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 
 private enum class PlayerContent { COVER, LYRICS }
-private enum class PlayerOverlay { NONE, QUEUE, COMMENTS, OPTIONS, SHARE, QUALITY, ACTIONS, MODE, LYRICS, WEIGHT, KARAOKE, SLEEP, AI, ROAMING, BACKGROUND, LYRICS_MANAGEMENT }
+private enum class PlayerOverlay { NONE, QUEUE, COMMENTS, OPTIONS, SHARE, QUALITY, ACTIONS, MODE, LYRICS, WEIGHT, PERFORMANCE, KARAOKE, SLEEP, AI, ROAMING, BACKGROUND, LYRICS_MANAGEMENT }
 internal val PlayerPagePosition = SemanticsPropertyKey<Float>("PlayerPagePosition")
 
 internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLocalOf { 1f }
@@ -64,10 +69,14 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
     onRoom: (() -> Unit)? = null, onDialogActive: (Boolean) -> Unit = {},
     onNetwork: (() -> Unit)? = null, onLike: (() -> Unit)? = null, onEqualizer: (() -> Unit)? = null,
     onAiNavigate: (String) -> Unit = {}, roamingRequest: Int = 0, onRoamingRequestConsumed: () -> Unit = {},
+    biliVideoRequest: Int = 0, onBiliVideoRequestConsumed: () -> Unit = {},
     // 0 = 收起（迷你条），1 = 完全展开；由 PlayerSheetDrag 的实时进度驱动，封面随之缩放
     expansion: () -> Float = { 1f }) {
     val state by vm.state.collectAsStateWithLifecycle()
     val queue by vm.queue.collectAsStateWithLifecycle()
+    val displayTrackTitle = remember(queue.current?.name) {
+        queue.current?.name.orEmpty().decodedMediaText()
+    }
     val settings by vm.settings.collectAsStateWithLifecycle()
     val appearance by vm.container.settings.state.collectAsStateWithLifecycle()
     val backgroundImage = remember(appearance.playerBackground) { vm.container.playerBackgrounds.file(appearance.playerBackground) }
@@ -151,14 +160,23 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
             }
         }))
     var queueHeight by remember { mutableFloatStateOf(1f) }
-    // B站 视频模式：画面直接进播放页，不跳页
+    // 哔哩哔哩 视频模式：画面直接进播放页，不跳页
     val commentsRequest by vm.openComments.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(commentsRequest) {
-        if (commentsRequest > 0) overlay = PlayerOverlay.COMMENTS
+        if (commentsRequest > 0) {
+            overlay = PlayerOverlay.COMMENTS
+            vm.consumeOpenCommentsRequest()
+        }
     }
     var biliFavoriteFor by remember { mutableStateOf<String?>(null) }
-    // B站 竖屏视频：只是把服务播放器的画面挂出来，切歌自动退出
-    var biliVideo by remember { mutableStateOf(false) }
+    // 哔哩哔哩 竖屏视频：只是把服务播放器的画面挂出来，切歌自动退出
+    var biliVideo by rememberSaveable(queue.current?.id) {
+        mutableStateOf(
+            queue.current?.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI &&
+                !queue.current?.externalIds?.bilibiliBvid.isNullOrBlank(),
+        )
+    }
+    var biliVideoTrackId by rememberSaveable { mutableStateOf<Long?>(null) }
     val playerContext = androidx.compose.ui.platform.LocalContext.current
     val playerScope = androidx.compose.runtime.rememberCoroutineScope()
     var biliStats by remember { mutableStateOf<io.github.currencortex.music.core.alt.BiliPlayback.Stats?>(null) }
@@ -171,9 +189,52 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
             }.getOrNull()
         }
     }
-    LaunchedEffect(queue.current?.id) { biliVideo = false }
+    LaunchedEffect(queue.current?.id) {
+        val currentId = queue.current?.id
+        if (biliVideo && biliVideoTrackId != null && biliVideoTrackId != currentId) {
+            biliVideo = false
+            io.github.currencortex.music.core.alt.BiliQuality.wantsVideo = false
+        }
+        biliVideoTrackId = currentId
+        if (biliVideo) io.github.currencortex.music.core.alt.BiliQuality.wantsVideo = true
+    }
+    val setBiliVideo: (Boolean) -> Unit = { enabled ->
+        val wasEnabled = biliVideo
+        biliVideo = enabled
+        io.github.currencortex.music.core.alt.BiliQuality.wantsVideo = enabled
+        if ((enabled || wasEnabled) && queue.current?.musicSource ==
+            io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
+            // Re-resolve at the current position. Audio mode keeps the lightweight stream while
+            // video mode asks BiliPlayback for the selected DASH video+audio composition.
+            vm.container.playerController.load(
+                play = state.showPause,
+                position = state.positionMs,
+                refreshSource = true,
+            )
+        }
+    }
+    LaunchedEffect(biliVideoRequest, queue.current?.musicSource, queue.current?.externalIds?.bilibiliBvid) {
+        if (biliVideoRequest > 0 && queue.current?.musicSource ==
+            io.github.currencortex.music.data.song.MusicSource.BILIBILI &&
+            !queue.current?.externalIds?.bilibiliBvid.isNullOrBlank()) {
+            setBiliVideo(true)
+            onBiliVideoRequestConsumed()
+        }
+    }
     var videoSpeed by remember { mutableStateOf(1f) }
     var mvBackground by rememberSaveable(queue.current?.id) { mutableStateOf(false) }
+    var foliaStage by remember { mutableStateOf(false) }
+    var foliaEntering by remember { mutableStateOf(false) }
+    var foliaScenePicker by remember { mutableStateOf(false) }
+    var foliaSeeking by remember { mutableStateOf(false) }
+    LaunchedEffect(expanded) {
+        if (!expanded && foliaStage) {
+            foliaStage = false
+            foliaEntering = false
+            controlsRevealed = false
+            controlsHidden = false
+        }
+    }
     var mvSource by remember(queue.current?.id) { mutableStateOf<PlayerMvSource?>(null) }
     var mvLoading by remember(queue.current?.id) { mutableStateOf(false) }
     var mvReturnPage by rememberSaveable(queue.current?.id) { mutableIntStateOf(PlayerContent.COVER.ordinal) }
@@ -200,8 +261,11 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         ?: qqMvInfo?.vid
     val hasMvBackground = currentSongForMv?.let { song ->
         when (song.musicSource) {
-            io.github.currencortex.music.data.song.MusicSource.NETEASE -> song.mv > 0
-            io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC -> !qqMvVid.isNullOrBlank()
+            io.github.currencortex.music.data.song.MusicSource.NETEASE,
+            io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
+            io.github.currencortex.music.data.song.MusicSource.BILIBILI,
+            io.github.currencortex.music.data.song.MusicSource.APPLE_MUSIC,
+            io.github.currencortex.music.data.song.MusicSource.SPOTIFY -> true
             else -> false
         }
     } == true
@@ -213,18 +277,40 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         val song = currentSongForMv ?: return@LaunchedEffect
         mvSource = null
         mvLoading = true
+        val biliCookie = vm.container.biliSession.cookieHeader()
+        val biliPreferred = vm.container.biliSession.loggedIn ||
+            song.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI
         val resolved = runCatching {
-            when (song.musicSource) {
+            val biliMv = if (biliPreferred) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.BiliMvResolver.resolve(
+                    title = song.name,
+                    artist = song.artists,
+                    durationMs = song.durationMs,
+                    cookie = biliCookie,
+                    knownBvid = song.externalIds.bilibiliBvid,
+                )
+            } else null
+            if (biliMv != null) {
+                PlayerMvSource(
+                    urls = listOf(biliMv.url),
+                    referer = "https://www.bilibili.com/",
+                    headers = buildMap {
+                        if (biliCookie.isNotBlank()) put("Cookie", biliCookie)
+                    },
+                    userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    mimeType = "video/mp4",
+                )
+            } else when (song.musicSource) {
                 io.github.currencortex.music.data.song.MusicSource.NETEASE -> PlayerMvSource(
                     vm.container.libraryRepository.mvSource(song.mv, 720), "https://music.163.com/")
                 io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC -> {
-                    val vid = qqMvVid ?: throw IllegalStateException("没有 MV 地址")
+                    val vid = qqMvVid ?: return@runCatching null
                     val qq = vm.container.qqSession.takeIf { it.loggedIn }
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         io.github.currencortex.music.core.alt.QqExtras.mvStream(
                             vid, qq?.cookies.orEmpty(), qq?.uin.orEmpty().ifBlank { "0" })
-                    }?.let { PlayerMvSource(it.url, it.referer) }
-                        ?: throw IllegalStateException("MV 地址不可用")
+                    }?.let { PlayerMvSource(it.urls, it.referer) }
                 }
                 else -> null
             }
@@ -233,11 +319,12 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         if (resolved == null) {
             mvBackground = false
             scope.launch { pager.animateScrollToPage(mvReturnPage) }
-            vm.container.errorNotices.show("这首歌曲暂时无法加载 MV 背景")
+            vm.container.errorNotices.show("哔哩哔哩和当前音乐服务都没有找到可播放的 MV")
         } else mvSource = resolved
     }
     val toggleMvBackground: () -> Unit = {
         if (!mvBackground) {
+            foliaStage = false
             mvReturnPage = pager.currentPage
             mvBackground = true
             scope.launch { pager.animateScrollToPage(PlayerContent.LYRICS.ordinal) }
@@ -245,6 +332,48 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
             mvBackground = false
             scope.launch { pager.animateScrollToPage(mvReturnPage) }
         }
+    }
+    val enterFoliaStage: () -> Unit = enter@{
+        if (foliaStage || foliaEntering) return@enter
+        mvReturnPage = pager.currentPage
+        mvBackground = false
+        mvSource = null
+        if (biliVideo) {
+            setBiliVideo(false)
+            runCatching { vm.container.playerController.holdForVideo(false) }
+        }
+        foliaEntering = true
+        scope.launch {
+            try {
+                pager.animateScrollToPage(PlayerContent.LYRICS.ordinal)
+                withFrameNanos { }
+                foliaStage = true
+                controlsRevealed = true
+                controlsHidden = false
+            } finally {
+                foliaEntering = false
+            }
+        }
+    }
+    val exitFoliaStage: () -> Unit = {
+        foliaScenePicker = false
+        foliaEntering = false
+        foliaStage = false
+        controlsRevealed = false
+        controlsHidden = false
+        scope.launch { pager.animateScrollToPage(mvReturnPage) }
+    }
+    val toggleFoliaControls: () -> Unit = {
+        if (controlsRevealed || !controlsHidden) {
+            controlsRevealed = false
+            controlsHidden = true
+        } else {
+            controlsRevealed = true
+            controlsHidden = false
+        }
+    }
+    BackHandler(enabled = foliaStage && overlay == PlayerOverlay.NONE && !sidePage.active && !queueGesture) {
+        exitFoliaStage()
     }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
@@ -285,8 +414,12 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         val widePlayer = maxWidth > maxHeight
         val immersiveCover = appearance.playerCoverStyle == io.github.currencortex.music.data.settings.PlayerCoverStyle.IMMERSIVE &&
             !(roaming.active && roaming.choice.code == "PUZZLE_MODE_RCMD")
+        val foliaMode = if (foliaStage) settings.lyricsDisplay.foliaScene.mode else null
+        val fullScreenFolia = foliaStage && !widePlayer && content == PlayerContent.LYRICS &&
+            expanded && !mvBackground && !queueGesture
         SideEffect { pagerArtwork.immersive = immersiveCover && !widePlayer; pagerArtwork.updateBounds() }
-        PlayerSystemBars(immersive = widePlayer)
+        PlayerSystemBars(immersive = widePlayer || fullScreenFolia,
+            hideNavigation = fullScreenFolia)
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
         // Hiding the status bar must not resize the cover midway through its flight.
@@ -302,8 +435,18 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
             }
         }
         val hideControls = animateFloatAsState(
-            if ((settings.lyricsDisplay.hideControls || controlsHidden) && !controlsRevealed) 1f else 0f,
+            if ((settings.lyricsDisplay.hideControls || controlsHidden || fullScreenFolia) && !controlsRevealed) 1f else 0f,
             tween(260, easing = LinearOutSlowInEasing), label = "lyricsControls")
+        val foliaControlsVisible by remember { derivedStateOf { hideControls.value < .5f } }
+        LaunchedEffect(fullScreenFolia, foliaControlsVisible, foliaScenePicker, foliaSeeking) {
+            if (fullScreenFolia && foliaControlsVisible && !foliaScenePicker && !foliaSeeking) {
+                delay(4200)
+                if (foliaControlsVisible && !foliaScenePicker && !foliaSeeking) {
+                    controlsRevealed = false
+                    controlsHidden = true
+                }
+            }
+        }
         // The neighbour page used to mount its complete Apple rail on the first drag frame.
         // Prepare it after the opening flight and other player transitions have settled,
         // while preserving the cheaper classic-page deferral and the immediate-swipe fallback.
@@ -315,10 +458,10 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                     (hideControls.value <= .0001f || hideControls.value >= .9999f)
             }
         }
-        val appleLyrics = settings.lyricsDisplay.style == LyricsStyle.APPLE_MUSIC
+        val fancyLyrics = settings.lyricsDisplay.style == LyricsStyle.APPLE_MUSIC || foliaStage
         var lyricsPrepared by remember { mutableStateOf(false) }
-        LaunchedEffect(appleLyrics, idleForLyrics) {
-            if (appleLyrics && idleForLyrics && !lyricsPrepared) {
+        LaunchedEffect(fancyLyrics, idleForLyrics) {
+            if (fancyLyrics && idleForLyrics && !lyricsPrepared) {
                 delay(120)
                 withFrameNanos { }
                 lyricsPrepared = true
@@ -329,9 +472,25 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         }
         val openQueue: () -> Unit = { scope.launch { queueMotion.animation.snapTo(0f); overlay = PlayerOverlay.QUEUE } }
         val functions: @Composable () -> Unit = {
-            PlayerSongActionsBar(vm, { overlay = PlayerOverlay.COMMENTS }, openQueue,
+            PlayerSongActionsBar(vm, vm::openCommentsRequest, openQueue,
                 { overlay = PlayerOverlay.SLEEP }, onLike, onEffects = onEqualizer,
                 onOptions = if (widePlayer) null else ({ overlay = PlayerOverlay.OPTIONS }))
+        }
+        val transport: @Composable () -> Unit = {
+            PlayerTransport(vm, onToggle, quality = {
+                Text(
+                    if (state.song?.privateLibrary == true) state.song?.originalQualityLabel.orEmpty()
+                    else state.audioInfo?.label ?: qualityLabelFor(settings.primarySource, settings.quality),
+                    Modifier.testTag("open_quality_sheet")
+                        .clickable(enabled = state.mode == PlayerMode.LOCAL && state.song?.privateLibrary != true,
+                            role = Role.Button) { overlay = PlayerOverlay.QUALITY }
+                        .padding(horizontal = 8.dp),
+                    color = Color.White.copy(alpha = .65f),
+                    fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }, leadingAction = { PlayerPlaybackModeButton(vm) },
+                trailingAction = { PlayerQueueButton(vm, openQueue) },
+                onSeekInteraction = { foliaSeeking = it })
         }
         val header: @Composable () -> Unit = {
             Row(Modifier.fillMaxWidth().height(if (widePlayer) 48.dp else 52.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -350,9 +509,7 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                     if (biliVideo) "关闭视频，回到音频" else "视频模式",
                     {
                         val entering = !biliVideo
-                        biliVideo = entering
-                        // 进视频前把音源重解析一次，确保这一路流带画面（进度保留）
-                        if (entering) vm.container.playerController.refreshSource()
+                        setBiliVideo(entering)
                     },
                     Modifier.testTag("player_video_mode"), selected = biliVideo)
                 // 只有带 BV 号的在线视频才能下载；本地缓存项没有 bvid，不显示按钮
@@ -380,18 +537,22 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                     }
                 }, Modifier.testTag("player_bili_download"))
                 if (biliSong != null) PlayerIconButton(PlayerIcon.MORE,
-                    "收藏到 B站 收藏夹", { biliFavoriteFor = biliSong.externalIds.bilibiliBvid }, Modifier.testTag("player_bili_favorite"))
+                    "收藏到 哔哩哔哩 收藏夹", { biliFavoriteFor = biliSong.externalIds.bilibiliBvid }, Modifier.testTag("player_bili_favorite"))
                 if (hasMvBackground) {
                     PlayerIconButton(PlayerIcon.VIDEO,
-                        if (mvBackground) "关闭 MV 背景" else "显示 MV 背景", toggleMvBackground,
-                        Modifier.testTag("player_mv_background"), selected = mvBackground, loading = mvLoading)
-                }
+                        if (mvBackground) "关闭 MV 背景" else "显示 MV 背景，长按进入 Folia", toggleMvBackground,
+                        Modifier.testTag("player_mv_background"), selected = mvBackground, loading = mvLoading,
+                        onLongClick = enterFoliaStage, onLongClickLabel = "进入 Folia 歌词舞台",
+                        longPressHint = !mvBackground)
+                } else PlayerIconButton(PlayerIcon.EFFECTS, "打开 Folia 歌词舞台", enterFoliaStage,
+                    Modifier.testTag("player_folia_stage"), selected = foliaStage)
                 PlayerIconButton(PlayerIcon.SHARE, "分享歌曲", { overlay = PlayerOverlay.SHARE }, Modifier.testTag("player_share"),
                     enabled = queue.current != null)
             }
         }
         PlayerSidePageLayout(sidePage,
-            enabled = expanded && !widePlayer && !sideDialog && !songNavigation.dialogActive && overlay == PlayerOverlay.NONE && !queueGesture && sheetDrag?.state?.dragging != true,
+            enabled = expanded && !widePlayer && !sideDialog && !songNavigation.dialogActive && overlay == PlayerOverlay.NONE &&
+                !queueGesture && !foliaSeeking && sheetDrag?.state?.dragging != true,
             openingDirection = { if (kotlin.math.abs(pager.currentPageOffsetFraction) > .001f) 0f
                 else if (pager.currentPage == 0) 1f else -1f },
             pagerScrolling = { pager.isScrollInProgress },
@@ -420,6 +581,7 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                 source = source, playing = state.showPause,
                 active = expanded && !sidePage.active,
                 positionMs = state.positionMs, timelineRevision = state.timelineRevision,
+                poster = currentSongForMv?.cover.orEmpty(),
                 onError = { message ->
                     mvBackground = false; mvSource = null
                     scope.launch { pager.animateScrollToPage(mvReturnPage) }
@@ -434,6 +596,51 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         CompositionLocalProvider(LocalPlayerPagerArtwork provides pagerArtwork) {
         Box(Modifier.fillMaxSize().onGloballyPositioned { pagerArtwork.root = it; pagerArtwork.updateBounds() }) {
         if (immersiveCover && !widePlayer && !mvBackground) PlayerPagerArtwork(pagerArtwork, queue.current, drawText = false)
+        AnimatedVisibility(visible = fullScreenFolia, modifier = Modifier.matchParentSize(),
+            enter = fadeIn(tween(240)) + scaleIn(tween(300), initialScale = .992f),
+            exit = fadeOut(tween(170)) + scaleOut(tween(190), targetScale = 1.008f)) {
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                alpha = playerSheetContentAlpha(sheetProgress())
+            }) {
+                // Keep the stage at its full viewport height. Resizing it while controls appear
+                // made the WebView reflow and pull the subtitles out of their composition.
+                LyricsPanel(vm, Modifier.matchParentSize().onGloballyPositioned { lyricsCoordinates = it },
+                    active = true, prepare = fancyLyrics && lyricsPrepared, foliaMode = foliaMode,
+                    foliaChromeHidden = false)
+                if (!foliaControlsVisible) {
+                    Box(Modifier.matchParentSize().zIndex(3f).pointerInput(Unit) {
+                        detectTapGestures { toggleFoliaControls() }
+                    })
+                }
+                AnimatedVisibility(visible = foliaControlsVisible,
+                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                        .padding(bottom = 92.dp).zIndex(12f),
+                    enter = fadeIn(tween(160)) + slideInVertically(tween(200, easing = LinearOutSlowInEasing)) { it / 4 },
+                    exit = fadeOut(tween(120)) + slideOutVertically(tween(150, easing = LinearOutSlowInEasing)) { it / 5 }) {
+                    FoliaStageControls(settings.lyricsDisplay.foliaScene,
+                        controlsVisible = foliaControlsVisible,
+                        onSelect = { foliaScenePicker = true }, onToggleControls = toggleFoliaControls,
+                        onExit = exitFoliaStage)
+                }
+                Box(
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().zIndex(11f)
+                        .onGloballyPositioned { controlsCoordinates = it },
+                ) {
+                    val duration = state.durationMs.takeIf { it > 0 } ?: queue.current?.durationMs ?: 0
+                    FoliaProgressControl(
+                        positionMs = state.positionMs,
+                        durationMs = duration,
+                        bufferedValue = if (state.song?.id == queue.current?.id) state.bufferedProgress(duration) else 0f,
+                        enabled = state.canControlPlayback && queue.current != null,
+                        onSeek = vm.player::seek,
+                        onInteractionChange = { foliaSeeking = it },
+                        compact = !foliaControlsVisible,
+                        modifier = Modifier.navigationBarsPadding().padding(horizontal = 18.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+        if (!fullScreenFolia) {
         Box(Modifier.fillMaxSize().graphicsLayer { translationY = -size.height * queueMotion.progress }
             .onGloballyPositioned { pagerArtwork.mainPage = it; pagerArtwork.updateBounds() }) {
         if (widePlayer && immersiveCover && !mvBackground) PlayerImmersiveCover(queue.current?.cover.orEmpty(),
@@ -449,7 +656,7 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                 alpha = playerSheetContentAlpha(sheetProgress()) * (1 - queueMotion.progress / .35f).coerceIn(0f, 1f) *
                     (if (biliVideo) 0f else 1f)
             }) {
-            if (!widePlayer) header()
+            if (!widePlayer && !fullScreenFolia) header()
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                 if (widePlayer) {
                     val stageHeight = (maxHeight - 24.dp).coerceAtLeast(0.dp)
@@ -461,7 +668,8 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                             HorizontalPager(pager, Modifier.weight(1f).fillMaxHeight().testTag("player_wide_pager")
                                 .semantics { this[PlayerPagePosition] = pager.currentPage + pager.currentPageOffsetFraction },
                                 beyondViewportPageCount = 1,
-                                userScrollEnabled = expanded && !sidePage.active && !mvBackground && sheetDrag?.state?.dragging != true,
+                                userScrollEnabled = expanded && !sidePage.active && !mvBackground && !foliaSeeking &&
+                                    sheetDrag?.state?.dragging != true,
                                 flingBehavior = PagerDefaults.flingBehavior(pager,
                                     snapAnimationSpec = tween(240, easing = LinearOutSlowInEasing))) { page ->
                                 Box(Modifier.fillMaxSize().then(if (pager.currentPage != page && !pager.isScrollInProgress)
@@ -472,15 +680,25 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                                         // Rasterizing the lyric rail competes with the mini-cover flight.
                                         // Reveal it after expansion; LyricsPanel retains it while collapsing.
                                         active = sheetSettled && (pager.currentPage == 1 || pager.isScrollInProgress), minimal = true,
-                                        prepare = appleLyrics && lyricsPrepared)
+                                        prepare = fancyLyrics && lyricsPrepared, foliaMode = foliaMode,
+                                        foliaChromeHidden = hideControls.value > .5f)
                                 }
                             }
                         }
                     }
                     Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) {
+                        if (foliaStage) FoliaStageControls(settings.lyricsDisplay.foliaScene,
+                            controlsVisible = foliaControlsVisible,
+                            onSelect = { foliaScenePicker = true }, onToggleControls = toggleFoliaControls,
+                            onExit = exitFoliaStage,
+                            modifier = Modifier.padding(end = 4.dp))
                         if (hasMvBackground) PlayerIconButton(PlayerIcon.VIDEO,
-                            if (mvBackground) "关闭 MV 背景" else "显示 MV 背景", toggleMvBackground,
-                            Modifier.testTag("player_wide_mv_background"), selected = mvBackground, loading = mvLoading)
+                            if (mvBackground) "关闭 MV 背景" else "显示 MV 背景，长按进入 Folia", toggleMvBackground,
+                            Modifier.testTag("player_wide_mv_background"), selected = mvBackground, loading = mvLoading,
+                            onLongClick = enterFoliaStage, onLongClickLabel = "进入 Folia 歌词舞台",
+                            longPressHint = !mvBackground)
+                        else PlayerIconButton(PlayerIcon.EFFECTS, "打开 Folia 歌词舞台", enterFoliaStage,
+                            Modifier.testTag("player_wide_folia_stage"), selected = foliaStage)
                         PlayerIconButton(PlayerIcon.MORE, "播放与歌词设置", { overlay = PlayerOverlay.OPTIONS },
                             Modifier.testTag("lyrics_options"))
                     }
@@ -489,7 +707,8 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                     HorizontalPager(pager, Modifier.fillMaxSize().testTag("player_content_pager")
                         .semantics { this[PlayerPagePosition] = pager.currentPage + pager.currentPageOffsetFraction },
                         beyondViewportPageCount = 1,
-                        userScrollEnabled = expanded && !mvBackground && (!sidePage.active || sidePage.pagerDragging) && sheetDrag?.state?.dragging != true,
+                        userScrollEnabled = expanded && !mvBackground && !foliaSeeking &&
+                            (!sidePage.active || sidePage.pagerDragging) && sheetDrag?.state?.dragging != true,
                         overscrollEffect = null,
                         flingBehavior = PagerDefaults.flingBehavior(pager, snapAnimationSpec = tween(240, easing = LinearOutSlowInEasing))) { page ->
                         Box(Modifier.fillMaxSize()
@@ -498,21 +717,22 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                             if (page == 0) pagerArtwork.coverPage = it else pagerArtwork.lyricsPage = it
                             pagerArtwork.updateBounds()
                         }) {
-                        if (page == 1) Column(Modifier.fillMaxSize()) {
+                        if (page == 1 && !fullScreenFolia) Column(Modifier.fillMaxSize()) {
                             Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)
                                 .testTag("player_lyrics_header"), verticalAlignment = Alignment.CenterVertically) {
                                 PlayerArtwork(queue.current?.cover.orEmpty(), Modifier.size(46.dp).testTag("player_lyrics_cover"), pixels = 800,
                                     pagerRole = PlayerPagerArtworkRole.LYRICS)
                                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                    PlayerSongText(queue.current?.name ?: "还没有选择歌曲", role = PlayerPagerArtworkRole.LYRICS, color = Color.White,
+                                    PlayerSongText(displayTrackTitle.ifBlank { "还没有选择歌曲" }, role = PlayerPagerArtworkRole.LYRICS, color = Color.White,
                                         fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     PlayerSongText(queue.current?.artists.orEmpty(), artistLink, role = PlayerPagerArtworkRole.LYRICS, subtitle = true, fontSize = 13.sp, color = Color.White.copy(alpha = .55f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                             LyricsPanel(vm, Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { lyricsCoordinates = it },
                                 active = pager.currentPage == 1 || pager.isScrollInProgress,
-                                expandLyricsWindow = controlsHidden, prepare = appleLyrics && lyricsPrepared)
-                        } else CoverContent(vm, Modifier.fillMaxSize(), transitionTarget = pager.currentPage == 0,
+                                expandLyricsWindow = controlsHidden, prepare = fancyLyrics && lyricsPrepared, foliaMode = foliaMode,
+                                foliaChromeHidden = hideControls.value > .5f)
+                        } else if (page == 0) CoverContent(vm, Modifier.fillMaxSize(), transitionTarget = pager.currentPage == 0,
                             active = pager.currentPage == 0 || pager.isScrollInProgress,
                             pagerRole = PlayerPagerArtworkRole.COVER,
                             immersive = immersiveCover, artistLink = artistLink, expand = expansion,
@@ -524,20 +744,7 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                         .onGloballyPositioned { controlsCoordinates = it }) {
                         PlayerControlsRegion(controlsVisibility) { functions() }
                         PlayerControlsRegion(controlsVisibility, Modifier.testTag("player_transport_transition")) {
-                            PlayerTransport(vm, onToggle, quality = {
-                                Text(
-                                    if (state.song?.privateLibrary == true) state.song?.originalQualityLabel.orEmpty()
-                                    else state.audioInfo?.label ?: qualityLabelFor(settings.primarySource, settings.quality),
-                                    Modifier.testTag("open_quality_sheet")
-                                        .clickable(
-                                            enabled = state.mode == PlayerMode.LOCAL && state.song?.privateLibrary != true,
-                                            role = Role.Button) { overlay = PlayerOverlay.QUALITY }
-                                        .padding(horizontal = 8.dp),
-                                    color = Color.White.copy(alpha = .65f),
-                                    fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                )
-                            }, leadingAction = { PlayerPlaybackModeButton(vm) },
-                                trailingAction = { PlayerQueueButton(vm, openQueue) })
+                            transport()
                         }
                     }
                 }
@@ -563,17 +770,23 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
         }
         }
         }
+        }
         if (biliVideo && queue.current?.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
-            io.github.currencortex.music.feature.bili.BiliVideoSurface()
-            io.github.currencortex.music.feature.bili.BiliVideoChrome(
+            io.github.currencortex.music.feature.bili.BiliNativeVideoScreen(
                 controller = vm.container.playerController,
-                title = queue.current?.name.orEmpty(),
+                bvid = queue.current?.externalIds?.bilibiliBvid.orEmpty(),
+                initialCid = queue.current?.externalIds?.bilibiliCid.orEmpty(),
+                cookie = vm.container.biliSession.cookieHeader(),
+                title = displayTrackTitle,
                 uploader = queue.current?.artists.orEmpty(),
+                initialCategory = queue.current?.category.orEmpty(),
+                initialDurationMs = queue.current?.durationMs ?: 0L,
                 liked = vm.actions.collectAsStateWithLifecycle().value.liked == true,
                 likeCount = biliStats?.like ?: 0L,
                 commentCount = biliStats?.reply ?: 0L,
                 favoriteCount = biliStats?.favorite ?: 0L,
-                onClose = { biliVideo = false },
+                viewCount = biliStats?.view ?: 0L,
+                onClose = { setBiliVideo(false) },
                 onLike = { vm.togglePrimaryLike() },
                 onFavorite = {
                     val bvid = queue.current?.externalIds?.bilibiliBvid
@@ -585,16 +798,38 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                 onQualityChanged = { vm.container.playerController.refreshSource() },
                 onDownload = {
                     val bvid = queue.current?.externalIds?.bilibiliBvid.orEmpty()
-                    val title = queue.current?.name.orEmpty()
+                    val title = displayTrackTitle
                     if (bvid.isNotBlank()) {
                         android.widget.Toast.makeText(playerContext, "开始缓存视频…",
                             android.widget.Toast.LENGTH_SHORT).show()
                         io.github.currencortex.music.feature.bili.BiliHost.of().download(bvid, title)
                     }
                 },
+                onRelatedSelected = { video ->
+                    val relatedId = video.bvid.hashCode().toLong().let { if (it < 0) -it else it }
+                    val next = io.github.currencortex.music.data.song.Song(
+                        id = relatedId,
+                        name = video.title,
+                        artists = video.owner.ifBlank { "哔哩哔哩" } + " · 哔哩哔哩",
+                        cover = video.cover,
+                        durationMs = video.durationSec * 1000L,
+                        video = true,
+                        musicSource = io.github.currencortex.music.data.song.MusicSource.BILIBILI,
+                        externalIds = io.github.currencortex.music.data.song.SongExternalIds(
+                            bilibiliBvid = video.bvid,
+                        ),
+                    )
+                    biliVideoTrackId = relatedId
+                    biliVideo = true
+                    io.github.currencortex.music.core.alt.BiliQuality.wantsVideo = true
+                    vm.player.playSong(next)
+                },
             )
         }
         BackHandler(enabled = sidePage.active && !sideDialog && overlay == PlayerOverlay.NONE && !queueGesture) { sidePage.close() }
+        if (foliaScenePicker) FoliaScenePickerDialog(settings.lyricsDisplay.foliaScene,
+            onSelect = { scene -> vm.lyricsDisplay { display -> display.copy(foliaScene = scene) } },
+            onDismiss = { foliaScenePicker = false })
         biliFavoriteFor?.takeIf { it.isNotBlank() }?.let { bvid ->
             io.github.currencortex.music.feature.bili.BiliFavoriteSheet(
                 container = vm.container, bvid = bvid, onDismiss = { biliFavoriteFor = null })
@@ -656,6 +891,14 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                     modifier = Modifier.testTag("open_player_background"), onClick = { overlay = PlayerOverlay.BACKGROUND })
                 MusicDestinationRow("私人漫游", summary = if (roaming.active) roaming.choice.title else "按你的喜好连续推荐",
                     modifier = Modifier.testTag("open_player_roaming"), onClick = { overlay = PlayerOverlay.ROAMING })
+                if (queue.current?.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC &&
+                    queue.current?.video != true) {
+                    MusicDestinationRow("相似歌曲电台", summary = "从当前歌曲继续生成 QQ 音乐推荐队列",
+                        modifier = Modifier.testTag("play_qq_similar"), onClick = {
+                            dismiss()
+                            vm.playQqSimilarSongs()
+                        })
+                }
                 if (onEqualizer != null) MusicDestinationRow("音效", onClick = { dismiss(); onEqualizer() },
                     modifier = Modifier.testTag("open_player_equalizer"))
                 MusicDestinationRow("播放模式", summary = playbackMode.label, onClick = { overlay = PlayerOverlay.MODE }, enabled = state.mode == PlayerMode.LOCAL || (together.active && !together.busy))
@@ -666,7 +909,7 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                 if (queue.current != null && queue.current?.video != true)
                     MusicDestinationRow("歌词管理", summary = "来源 · 在线匹配 · 单曲偏移 · 导入导出",
                         modifier = Modifier.testTag("open_lyrics_management"), onClick = { overlay = PlayerOverlay.LYRICS_MANAGEMENT })
-                if (onRoom != null && state.song?.privateLibrary != true) MusicDestinationRow(if (state.mode == PlayerMode.ROOM) "房间控制" else "一起听", onClick = { dismiss(); onRoom() })
+                if (onRoom != null && state.song?.privateLibrary != true) MusicDestinationRow(if (state.mode == PlayerMode.ROOM) "一起听控制" else "一起听", onClick = { dismiss(); onRoom() })
                 }
             }
             PlayerOverlay.AI -> PlayerAiDialog(vm.ai, dismiss) { card ->
@@ -693,6 +936,19 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                         onClick = { vm.lyricsDisplay { it.copy(karaokeScope = scope) }; overlay = PlayerOverlay.LYRICS })
                 }
             }
+            PlayerOverlay.PERFORMANCE -> MusicChoiceDialog("歌词性能", { overlay = PlayerOverlay.LYRICS }) {
+                LyricsRenderQuality.entries.forEach { quality ->
+                    MusicDialogChoiceRow(quality.label, quality == settings.lyricsDisplay.renderQuality,
+                        summary = when (quality) {
+                            LyricsRenderQuality.AUTO -> "低内存或旧版图形能力自动降到省电"
+                            LyricsRenderQuality.FULL -> "保留模糊、辉光、上提和全部轻量粒子"
+                            LyricsRenderQuality.BALANCED -> "保留当前行模糊与辉光，关闭额外粒子场景"
+                            LyricsRenderQuality.POWER_SAVER -> "关闭实时模糊、辉光和逐字上提"
+                        },
+                        modifier = Modifier.testTag("lyrics_performance_${quality.name}"),
+                        onClick = { vm.lyricsDisplay { it.copy(renderQuality = quality) }; overlay = PlayerOverlay.LYRICS })
+                }
+            }
             PlayerOverlay.SLEEP -> SleepTimerSheet(vm.sleepTimer, dismiss)
             PlayerOverlay.LYRICS -> {
                 val lyrics by vm.lyrics.collectAsStateWithLifecycle()
@@ -701,7 +957,9 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
                 MusicDialog("歌词显示", dismiss) {
                     LyricsDisplaySettings(settings.lyricsFontSize, vm::lyricsFontSize, settings.lyricsWeight, { overlay = PlayerOverlay.WEIGHT },
                         settings.lyricsDisplay, vm::lyricsDisplay, { overlay = PlayerOverlay.KARAOKE },
-                        settings.lyricsFont, settings.lyricsFontFile, vm::lyricsFont, vm::lyricsFontFile, currentLyric)
+                        onRenderQuality = { overlay = PlayerOverlay.PERFORMANCE },
+                        settings.lyricsFont, settings.lyricsFontFile, vm::lyricsFont, vm::lyricsFontFile, currentLyric,
+                        onStyle = { style -> vm.lyricsDisplay { it.copy(style = style) } })
                 }
             }
         }
@@ -767,12 +1025,15 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
 @Composable private fun WideControlsContent(vm: PlayerViewModel, onToggle: () -> Unit,
     functions: @Composable () -> Unit, artistLink: Modifier) {
     val queue by vm.queue.collectAsStateWithLifecycle()
+    val displayTitle = remember(queue.current?.name) {
+        queue.current?.name.orEmpty().decodedMediaText()
+    }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("player_wide_controls")) {
         val compact = maxHeight < 360.dp
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 8.dp),
             verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 24.dp, Alignment.CenterVertically)) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-                Text(queue.current?.name ?: "还没有选择歌曲", Modifier.testTag("player_song_title"),
+                Text(displayTitle.ifBlank { "还没有选择歌曲" }, Modifier.testTag("player_song_title"),
                     color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(queue.current?.artists.orEmpty(), Modifier.padding(top = 6.dp).then(artistLink),
@@ -784,8 +1045,25 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
     }
 }
 
+private fun String.decodedMediaText(): String {
+    var value = this
+    repeat(3) {
+        val decoded = value
+            .replace("&amp;amp;", "&amp;")
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+        if (decoded == value) return value
+        value = decoded
+    }
+    return value
+}
+
 @Composable private fun LyricsPanel(vm: PlayerViewModel, modifier: Modifier, active: Boolean = true, minimal: Boolean = false,
-    expandLyricsWindow: Boolean = false, prepare: Boolean = false) {
+    expandLyricsWindow: Boolean = false, prepare: Boolean = false, foliaMode: String? = null,
+    foliaChromeHidden: Boolean = true) {
     // The pager keeps its neighbouring header measured for shared-element endpoints.
     // Apple paragraphs are prepared in the settled player's idle interval; waiting for
     // the first horizontal drag would put shaping and raster work on that gesture frame.
@@ -800,22 +1078,47 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
     val player by vm.state.collectAsStateWithLifecycle()
     val position = rememberLyricsPosition(if (active) player else player.copy(playing = false))
     if (lyrics.matches(player.song) && lyrics.document.lines.isNotEmpty()) key(lyrics.songKey, lyrics.document) {
-        // B站 字幕是机器听写，界面必须声明“可能不准确”，否则用户会以为是官方歌词
+        // 哔哩哔哩 字幕是机器听写，界面必须声明“可能不准确”，否则用户会以为是官方歌词
         val autoNote = lyrics.origin?.provider == "bilibili"
         if (autoNote) Box(Modifier.fillMaxWidth(), contentAlignment = androidx.compose.ui.Alignment.Center) {
             val lang = io.github.currencortex.music.core.alt.BiliPlayback.lastSubtitleInfo
-            Text("字幕由 B 站自动生成" + if (lang.isBlank()) "" else "（" + lang + "）" + "，可能存在误差",
+            Text("字幕由 哔哩哔哩自动生成" + if (lang.isBlank()) "" else "（" + lang + "）" + "，可能存在误差",
                 Modifier.padding(bottom = 4.dp).testTag("lyrics_auto_note"),
                 fontSize = 10.5.sp, color = Color.White.copy(alpha = .42f), letterSpacing = .3.sp)
         }
         val settings by vm.settings.collectAsStateWithLifecycle()
-        LyricsScreen(lyrics.document, position, vm.player::seek, modifier, player.canControlPlayback,
-            settings.lyricsDisplay.translation, settings.lyricsDisplay.romanization, settings.lyricsDisplay.wordAnimation,
-            settings.lyricsDisplay.blur, if (minimal) settings.lyricsFontSize * .75f else settings.lyricsFontSize,
-            settings.lyricsWeight, settings.lyricsOffsetMs - lyrics.songOffsetMs,
-            settings.lyricsDisplay.copy(hideControls = settings.lyricsDisplay.hideControls || expandLyricsWindow),
-            minimal = minimal, perspective = settings.lyricsDisplay.perspective, cover = player.song?.cover.orEmpty(),
-            mediaDurationMs = player.durationMs, playbackRunning = active && player.playing && !player.loading)
+        if (foliaMode != null) {
+            val stageLyrics = remember(lyrics, settings.lyricsDisplay.immersiveRomanization) {
+                if (settings.lyricsDisplay.immersiveRomanization)
+                    lyrics.copy(document = lyrics.document.withImmersiveRomanization()) else lyrics
+            }
+            FoliaLyricsStage(
+                song = player.song,
+                lyrics = stageLyrics,
+                player = player,
+                position = position,
+                lyricOffsetMs = settings.lyricsOffsetMs - lyrics.songOffsetMs,
+                mode = foliaMode,
+                translation = settings.lyricsDisplay.translation,
+                romanization = settings.lyricsDisplay.romanization,
+                chromeHidden = foliaChromeHidden,
+                renderQuality = settings.lyricsDisplay.renderQuality,
+                audioMeter = vm.container.dockAudioLevel,
+                onError = { vm.container.errorNotices.show("Folia 歌词舞台加载失败") },
+                modifier = modifier,
+            )
+        } else {
+            val rhythmGlow = rememberLyricsRhythmGlow(vm.container.dockAudioLevel, active && settings.lyricsDisplay.glow,
+                active && player.playing && !player.loading)
+            LyricsScreen(lyrics.document, position, vm.player::seek, modifier, player.canControlPlayback,
+                settings.lyricsDisplay.translation, settings.lyricsDisplay.romanization, settings.lyricsDisplay.wordAnimation,
+                settings.lyricsDisplay.blur, if (minimal) settings.lyricsFontSize * .75f else settings.lyricsFontSize,
+                settings.lyricsWeight, settings.lyricsOffsetMs - lyrics.songOffsetMs,
+                settings.lyricsDisplay.copy(hideControls = settings.lyricsDisplay.hideControls || expandLyricsWindow),
+                minimal = minimal, perspective = settings.lyricsDisplay.perspective, cover = player.song?.cover.orEmpty(),
+                mediaDurationMs = player.durationMs, playbackRunning = active && player.playing && !player.loading,
+                rhythmGlow = rhythmGlow)
+        }
     } else Box(modifier.testTag("lyrics_panel"), contentAlignment = Alignment.Center) {
         if (lyrics.loading) Column(Modifier.fillMaxWidth().padding(28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             MusicPlaceholder(Modifier.fillMaxWidth(.8f).height(30.dp))
@@ -823,13 +1126,13 @@ internal val LocalPlayerExpansion = androidx.compose.runtime.staticCompositionLo
             MusicPlaceholder(Modifier.fillMaxWidth(.6f).height(30.dp))
             Text("正在加载歌词", fontSize = 13.sp, color = Color.White.copy(alpha = .45f))
         } else {
-            // B站 视频没有字幕时明确说“暂无字幕”，并说明不会用别处的歌词顶替
+            // 哔哩哔哩 视频没有字幕时明确说“暂无字幕”，并说明不会用别处的歌词顶替
             val isBili = lyrics.origin?.provider == "bilibili"
             val message = lyrics.error ?: if (isBili) "这条视频没有字幕" else "暂无歌词"
             Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(message, color = Color.White.copy(alpha = .62f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                if (isBili) Text("B站 未提供自动字幕，不会用其它来源的歌词替代",
+                if (isBili) Text("哔哩哔哩 未提供自动字幕，不会用其它来源的歌词替代",
                     fontSize = 12.sp, color = Color.White.copy(alpha = .38f))
             }
         }

@@ -21,9 +21,15 @@ import io.github.currencortex.music.ui.component.nativeui.*
 import top.yukonga.miuix.kmp.basic.TextField
 
 /** Sources and connections only; playback and other settings each have one owner. */
-@Composable fun MusicSettingsScreen(vm: MusicSettingsViewModel, onNavidrome: () -> Unit = {}, onEmby: () -> Unit = {}) {
+@Composable fun MusicSettingsScreen(vm: MusicSettingsViewModel, onNavidrome: () -> Unit = {}, onEmby: () -> Unit = {},
+    onLocalMusic: () -> Unit = {}, onImportPlaylist: () -> Unit = {}, onFreeRadio: () -> Unit = {},
+    onWebDav: () -> Unit = {}, onMusicAssistant: () -> Unit = {}) {
     SettingsUiScope {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val navidrome by vm.navidromeAccount.collectAsStateWithLifecycle()
+    val emby by vm.embyAccount.collectAsStateWithLifecycle()
+    val webDav by vm.webDavAccount.collectAsStateWithLifecycle()
+    val assistant by vm.musicAssistantAccount.collectAsStateWithLifecycle()
     val state by vm.state.collectAsStateWithLifecycle()
     val provider by vm.audioProvider.collectAsStateWithLifecycle()
     val audioState by vm.audioState.collectAsStateWithLifecycle()
@@ -33,6 +39,35 @@ import top.yukonga.miuix.kmp.basic.TextField
     var serverDialogOpen by rememberSaveable { mutableStateOf(false) }
     var customServerOpen by rememberSaveable { mutableStateOf(false) }
     SettingsPage("音源与网络", "network_settings") {
+        item("personal_library") { SettingsSection("我的曲库", MusicIcons.Device) {
+            MusicDestinationRow("本地音乐", onLocalMusic, Modifier.testTag("open_local_music"),
+                summary = "扫描手机音频 · 离线播放与管理")
+            SettingsDivider()
+            MusicDestinationRow("导入歌单", onImportPlaylist, Modifier.testTag("open_playlist_import"),
+                summary = "链接、文字、图片与本地歌曲")
+            SettingsDivider()
+            MusicDestinationRow("Navidrome", onNavidrome, Modifier.testTag("open_navidrome"),
+                summary = if (navidrome.configured)
+                    "已连接 ${navidrome.username} · 原音质 · Subsonic" else
+                    "未连接 · 连接自己的 Subsonic 曲库")
+            SettingsDivider()
+            MusicDestinationRow("Emby", onEmby, Modifier.testTag("open_emby"),
+                summary = if (emby.configured)
+                    "已连接 ${emby.username} · 原音质 · 专辑与歌单" else
+                    "未连接 · 连接自己的 Emby 媒体库")
+            SettingsDivider()
+            MusicDestinationRow("WebDAV", onWebDav, Modifier.testTag("open_webdav"),
+                summary = if (webDav.configured) "已连接 " + webDav.username + " · 原文件播放" else
+                    "未连接 · Nextcloud、坚果云及标准 WebDAV")
+            SettingsDivider()
+            MusicDestinationRow("Music Assistant", onMusicAssistant, Modifier.testTag("open_music_assistant"),
+                summary = if (assistant.configured)
+                    "已连接 " + assistant.userName.ifBlank { "Music Assistant" } + " · 曲库与播放器" else
+                    "未连接 · 汇总自建音乐源并发送到播放器")
+            SettingsDivider()
+            MusicDestinationRow("自由电台", onFreeRadio, Modifier.testTag("open_free_radio"),
+                summary = "Radio Browser 公开电台 · 无需账号或会员")
+        } }
         item("source") { SettingsSection("音乐音源", MusicIcons.Headphones) {
             SettingsOptionsRow("音源", provider.provider.label, AudioProvider.entries.map { entry ->
                 SettingsOption("audio_provider_${entry.name.lowercase()}", entry.label, provider.provider == entry,
@@ -83,12 +118,6 @@ import top.yukonga.miuix.kmp.basic.TextField
             SettingsDivider()
             SettingsPreference(if (state.busy) "正在测试…" else "测试连接", state.message,
                 Modifier.testTag("server_test"), enabled = !state.busy, onClick = { vm.test() })
-        } }
-        item("library") { SettingsSection("自建曲库", MusicIcons.List) {
-            MusicDestinationRow("Navidrome", onNavidrome, Modifier.testTag("open_navidrome"),
-                summary = "连接自己的音乐服务器 · Subsonic")
-            SettingsDivider()
-            MusicDestinationRow("Emby", onEmby, Modifier.testTag("open_emby"), summary = "专辑、歌曲、艺术家与歌单 · 原音质播放")
         } }
     }
     if (serverDialogOpen) CurrentMusicServerDialog(vm, onDismiss = { serverDialogOpen = false }, onCustom = {

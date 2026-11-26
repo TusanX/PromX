@@ -9,18 +9,28 @@ import kotlinx.serialization.SerialName
                              val musicSource: MusicSource = MusicSource.NETEASE,
                              val externalIds: SongExternalIds = SongExternalIds(),
                              val navidrome: NavidromeTrackRef? = null, val videoQuality: Int = 1080, val localUri: String = "", val emby: EmbyTrackRef? = null,
-                             val albumId: Long = 0) {
-    val privateLibrary get() = musicSource == MusicSource.NAVIDROME || musicSource == MusicSource.EMBY
-    val privateIdentity get() = emby?.identity ?: navidrome?.identity
-    val originalQualityLabel get() = if (musicSource == MusicSource.EMBY) "Emby 原音质" else "Navidrome 原音质"
+                             val albumId: Long = 0, val viewCount: Long = 0, val likeCount: Long = 0,
+                             val category: String = "") {
+    val privateLibrary get() = musicSource in setOf(MusicSource.NAVIDROME, MusicSource.EMBY, MusicSource.WEBDAV, MusicSource.MUSIC_ASSISTANT)
+    val privateIdentity get() = emby?.identity ?: navidrome?.identity ?: externalIds.webDavPath ?: externalIds.musicAssistantUri
+    val originalQualityLabel get() = when (musicSource) {
+        MusicSource.EMBY -> "Emby 原音质"
+        MusicSource.WEBDAV -> "WebDAV 原音质"
+        MusicSource.MUSIC_ASSISTANT -> "Music Assistant 原音质"
+        else -> "Navidrome 原音质"
+    }
 }
-@Serializable enum class MusicSource { NETEASE, QQ_MUSIC, BILIBILI, APPLE_MUSIC, SPOTIFY, NAVIDROME, LOCAL, EMBY }
+fun Song.usesNeteaseLikeState(neteaseMain: Boolean): Boolean = musicSource == MusicSource.NETEASE && neteaseMain
+@Serializable enum class MusicSource { NETEASE, QQ_MUSIC, BILIBILI, APPLE_MUSIC, SPOTIFY, NAVIDROME, LOCAL, EMBY, WEBDAV, MUSIC_ASSISTANT }
 @Serializable data class NavidromeTrackRef(val id: String, val identity: String, val format: String = "",
     val sampleRate: Int = 0, val channels: Int = 0)
 @Serializable data class SongExternalIds(val neteaseId: String? = null, val qqMusicId: String? = null,
     val qqMediaId: String? = null,
     val bilibiliBvid: String? = null, val bilibiliCid: String? = null, val qqNumericId: String? = null,
-    val appleMusicId: String? = null, val spotifyId: String? = null, val qqMvVid: String? = null)
+    val appleMusicId: String? = null, val spotifyId: String? = null, val qqMvVid: String? = null,
+    val qqAlbumMid: String? = null, val qqArtistMids: List<String> = emptyList(),
+    val webDavPath: String? = null, val musicAssistantUri: String? = null,
+    val musicAssistantProvider: String? = null, val musicAssistantItemId: String? = null)
 @Serializable data class LyricContextDto(val t: Long? = null, val txt: String = "", val matched: Boolean = false)
 @Serializable data class SongDto(@SerialName("ncm_id") val id: Long, val name: String, val artists: String = "",
                                 val album: String = "", val pic: String = "", val duration: Long = 0, val mv: Long = 0,
@@ -53,8 +63,14 @@ data class SearchPage(val songs: List<Song>, val total: Int, val hasMore: Boolea
     val matchSource: String = "", val bitrate: Long = 0, val bits: Int = 0, val size: Long = 0,
     val durationMs: Long = 0, val expectedDurationMs: Long = 0) {
     val matched get() = level == "matched" || source == "netease-match"
-    val qualityLabel get() = if (level == "preview" || source == "qq-preview") "试听" else if (matched) "匹配音源" else
-        io.github.currencortex.music.core.media.AudioQuality.entries.firstOrNull { it.value == level }?.label ?: "未知音质"
+    val qualityLabel get() = when {
+        level == "preview" || source == "qq-preview" -> "试听"
+        matched -> "匹配音源"
+        source == "local" || source == "cached" -> "本地原音质"
+        source == "video" -> "视频"
+        else -> io.github.currencortex.music.core.media.AudioQuality.entries.firstOrNull { it.value == level }?.label
+            ?: level.takeIf { it.isNotBlank() } ?: "未知音质"
+    }
     // Without a file digest, two signed URLs may point to different recordings.
     val cacheIdentity: String get() = if (!matched) "" else md5.takeIf { it.matches(Regex("[a-fA-F0-9]{32}")) }
         ?.lowercase() ?: java.security.MessageDigest.getInstance("SHA-256").digest(url.toByteArray(Charsets.UTF_8))

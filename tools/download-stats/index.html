@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PromX 下载统计</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><i></i><span>PromX</span><small>下载统计</small></div>
+      <div class="local-state"><i></i>仅本机可见</div>
+    </header>
+
+    <section class="intro">
+      <div>
+        <p class="eyebrow">DOWNLOAD RECORDS</p>
+        <h1>下载记录。</h1>
+        <p>只记录腾讯云分片下载校验成功的事件，不保存账号、IP 地址或完整浏览器标识。</p>
+      </div>
+      <button class="refresh" id="refresh" type="button">刷新数据</button>
+    </section>
+
+    <section class="metrics" aria-label="下载概览">
+      <article><small>累计下载</small><strong id="total">—</strong><span>全部版本</span></article>
+      <article><small>今日</small><strong id="today">—</strong><span>UTC+8 日期</span></article>
+      <article><small>最近 7 天</small><strong id="last7">—</strong><span>滚动统计</span></article>
+      <article><small>最近 30 天</small><strong id="last30">—</strong><span>滚动统计</span></article>
+    </section>
+
+    <div class="dashboard-grid">
+      <section class="panel chart-panel">
+        <div class="panel-title"><h2>近 14 天下载</h2><span id="updated">等待加载</span></div>
+        <div class="chart" id="chart" aria-label="近 14 天下载趋势"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><h2>版本分布</h2></div>
+        <div class="breakdown" id="versions"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><h2>来源分布</h2></div>
+        <div class="breakdown" id="sources"></div>
+      </section>
+    </div>
+
+    <section class="panel recent-panel">
+      <div class="panel-title"><h2>最近下载</h2><span>最多显示 50 条</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>时间</th><th>版本</th><th>平台</th><th>来源</th></tr></thead>
+          <tbody id="recent"><tr><td colspan="4">等待加载</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <p class="error" id="error" role="alert"></p>
+  </main>
+</body>
+</html>

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站 wbi 签名：playurl / view / player/v2 的 wbi 版本都要求 w_rid + wts，
+// 哔哩哔哩 wbi 签名：playurl / view / player/v2 的 wbi 版本都要求 w_rid + wts，
 // 不带签名的请求在新视频上会被当成未授权（拿到 403 或空数据）。
 // 混入表与算法参考 Bilight（MIT）core/BiliHttp.kt。
 package io.github.currencortex.music.core.alt

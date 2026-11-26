@@ -25,7 +25,7 @@ class ApiClient(
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(75, TimeUnit.SECONDS).writeTimeout(30, TimeUnit.SECONDS)
             .callTimeout(90, TimeUnit.SECONDS).followRedirects(false)
-            // 备用音源的媒体请求需要来源头：B站 CDN 不带 Referer 会 403
+            // 备用音源的媒体请求需要来源头：哔哩哔哩 CDN 不带 Referer 会 403
             .addInterceptor { chain ->
                 val request = chain.request()
                 val host = request.url.host

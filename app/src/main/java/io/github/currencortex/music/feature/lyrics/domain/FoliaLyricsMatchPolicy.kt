@@ -50,7 +50,7 @@ object FoliaLyricsMatchPolicy {
         return Details((capped * multiplier).roundToInt().coerceIn(0, 100), titleMatched, artistMatched, albumMatched, durationMatched)
     }
 
-    /** B站标题常带【无损音质】/MV/emoji 等装饰，匹配歌词前先剥掉，否则搜到的不是同一首歌 */
+    /** 哔哩哔哩标题常带【无损音质】/MV/emoji 等装饰，匹配歌词前先剥掉，否则搜到的不是同一首歌 */
     private fun cleanBiliTitle(raw: String): String = raw
         .replace(Regex("【[^】]*】"), " ")
         .replace(Regex("\\[[^\\]]*\\]"), " ")

@@ -16,9 +16,12 @@ import io.github.currencortex.music.data.settings.LyricsTypography
 import io.github.currencortex.music.data.settings.LyricsWeight
 import io.github.currencortex.music.data.settings.LyricsDisplayOptions
 import io.github.currencortex.music.data.settings.LyricsStyle
+import io.github.currencortex.music.data.settings.LyricsRenderQuality
 import io.github.currencortex.music.feature.lyrics.ui.lyricsFontWeight
 import io.github.currencortex.music.ui.component.MusicDestinationRow
 import io.github.currencortex.music.ui.component.AppleMusicLyricsControls
+import io.github.currencortex.music.ui.component.LyricsStyleSelector
+import io.github.currencortex.music.ui.component.nativeui.SettingsDivider
 import io.github.currencortex.music.feature.lyrics.ui.currentLyricsFontFamily
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -26,12 +29,14 @@ import kotlin.math.roundToInt
 
 @Composable internal fun LyricsDisplaySettings(fontSize: Float, onFontSize: (Float) -> Unit, weightMode: LyricsWeight, onWeight: () -> Unit,
     display: LyricsDisplayOptions, onDisplay: ((LyricsDisplayOptions) -> LyricsDisplayOptions) -> Unit,
-    onKaraokeScope: () -> Unit,
+    onKaraokeScope: () -> Unit, onRenderQuality: () -> Unit = {},
     font: io.github.currencortex.music.data.settings.LyricsFont = io.github.currencortex.music.data.settings.LyricsFont.SYSTEM,
     fontFile: String = "", onFont: (io.github.currencortex.music.data.settings.LyricsFont) -> Unit = {},
-    onFontFile: suspend (String) -> Unit = {}, previewText: String = "暂无歌词") {
+    onFontFile: suspend (String) -> Unit = {}, previewText: String = "暂无歌词",
+    onStyle: ((LyricsStyle) -> Unit)? = null) {
     val ink = MiuixTheme.colorScheme.onSurface
     val classic = display.style == LyricsStyle.CLASSIC
+    val apple = display.style == LyricsStyle.APPLE_MUSIC
     val staged = classic && (display.smoke || display.particles)
     var preview by remember(fontSize) { mutableFloatStateOf(fontSize) }
     var strength by remember(display.fontWeight) { mutableIntStateOf(display.fontWeight) }
@@ -61,8 +66,13 @@ import kotlin.math.roundToInt
                     }
                 })
         }
-        if (!classic) AppleMusicLyricsControls(display, onDisplay)
-        if (!staged) LyricsToggle("歌词居中对齐", display.centered, { value -> onDisplay { it.copy(centered = value) } }, "lyrics_centered")
+        if (onStyle != null) {
+            Text("歌词样式", fontSize = 16.sp, color = ink)
+            LyricsStyleSelector(display.style, onStyle, Modifier.testTag("player_lyrics_style"))
+            SettingsDivider()
+        }
+        if (apple) AppleMusicLyricsControls(display, onDisplay)
+        if (classic && !staged) LyricsToggle("歌词居中对齐", display.centered, { value -> onDisplay { it.copy(centered = value) } }, "lyrics_centered")
         Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
             Text("字体粗细 $strength", fontSize = 16.sp, color = ink)
             Slider(value = strength.toFloat(), onValueChange = { strength = ((it / 100).roundToInt() * 100).coerceIn(400, 900) },
@@ -80,6 +90,8 @@ import kotlin.math.roundToInt
                 color = ink.copy(alpha = .6f), modifier = Modifier.padding(top = 4.dp))
         }
         MusicDestinationRow("歌词字重", summary = weightMode.label, onClick = onWeight, modifier = Modifier.testTag("open_lyrics_weight"))
+        MusicDestinationRow("歌词性能", summary = display.renderQuality.label, onClick = onRenderQuality,
+            modifier = Modifier.testTag("open_lyrics_performance"))
         if (classic && android.os.Build.VERSION.SDK_INT >= 31) LyricsToggle("歌词视图模糊", display.blur,
             { value -> onDisplay { it.copy(blur = value) } }, "lyrics_blur")
         LyricsToggle("交错滚动效果", display.stagger, { value -> onDisplay { it.copy(stagger = value) } }, "lyrics_stagger")

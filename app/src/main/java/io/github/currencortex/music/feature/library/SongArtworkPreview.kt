@@ -31,9 +31,10 @@ import io.github.currencortex.music.ui.component.nativeui.*
                 add(GlassMenuItem("queue", "加入队列", MusicIcons.List, onClick = queue))
             }
         }, destinations = buildList {
+            val artistRoutes = songArtistRoutes(song)
             if (song.artists.isNotBlank()) add(GlassMenuItem("artist", "查看歌手",
-                onClick = { navigate(song.artistIds.singleOrNull()?.let { "lib/artist/$it" } ?: catalogRoute(false, song.artists)) }))
-            if (song.album.isNotBlank()) add(GlassMenuItem("album", "查看专辑", onClick = { navigate(catalogRoute(true, song.album)) }))
+                onClick = { navigate(artistRoutes.firstOrNull()?.second ?: catalogRoute(false, song.artists, song.musicSource)) }))
+            songAlbumRoute(song)?.let { route -> add(GlassMenuItem("album", "查看专辑", onClick = { navigate(route) })) }
             if (more.isNotEmpty()) add(GlassMenuItem("more", "更多操作", children = more))
         }, onDismiss = onDismiss)
 }

@@ -162,14 +162,21 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             tag = "profile_bili_login", showDot = biliProfile != null) { navigate("bili/login") }
         SettingsDivider(52.dp)
         ProfileDestination("导入歌单", "链接、文字、图片与本地歌曲", MusicIcons.Transfer, "profile_playlist_import") { navigate("user/playlist-import") }
-        if (navidromeConfigured) {
-            SettingsDivider(52.dp)
-            ProfileDestination("Navidrome 曲库", "自己的音乐服务器", MusicIcons.Storage, "profile_navidrome") { navigate("navidrome") }
-        }
-        if (embyConfigured) {
-            SettingsDivider(52.dp)
-            ProfileDestination("Emby 曲库", "自己的音乐服务器", MusicIcons.Storage, "profile_emby") { navigate("emby") }
-        }
+        SettingsDivider(52.dp)
+        ProfileAccountDestination(
+            title = "Navidrome 曲库",
+            summary = if (navidromeConfigured) "已连接 · 私有曲库原音质播放" else "未连接 · 连接自己的 Subsonic 曲库",
+            avatarUrl = "", icon = MusicIcons.Storage, tag = "profile_navidrome",
+            showDot = navidromeConfigured) { navigate("navidrome") }
+        SettingsDivider(52.dp)
+        ProfileAccountDestination(
+            title = "Emby 曲库",
+            summary = if (embyConfigured) "已连接 · 专辑、歌曲和歌单" else "未连接 · 连接自己的 Emby 媒体库",
+            avatarUrl = "", icon = MusicIcons.Storage, tag = "profile_emby",
+            showDot = embyConfigured) { navigate("emby") }
+        SettingsDivider(52.dp)
+        ProfileDestination("自由电台", "公开网络电台 · 无需账号或会员", MusicIcons.Play,
+            "profile_free_radio") { navigate("free-radio") }
     }
 }
 

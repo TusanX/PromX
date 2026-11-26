@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站 视频下载：取 html5 mp4（含画面与声音），流式写入 Movies 目录。
+// 哔哩哔哩 视频下载：取 html5 mp4（含画面与声音），流式写入 Movies 目录。
 package io.github.currencortex.music.feature.bili
 
 import android.content.ContentValues

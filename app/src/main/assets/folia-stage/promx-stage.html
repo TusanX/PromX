@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <title>PromX Stage</title>
+  <script>
+    (() => {
+      const syncViewport = () => {
+        const height = Math.max(
+          window.innerHeight || 0,
+          window.visualViewport?.height || 0,
+          document.documentElement.clientHeight || 0,
+          1
+        );
+        document.documentElement.style.setProperty("--promx-viewport-height", `${Math.round(height)}px`);
+      };
+      syncViewport();
+      window.addEventListener("resize", syncViewport, { passive: true });
+      window.visualViewport?.addEventListener("resize", syncViewport, { passive: true });
+      window.addEventListener("load", syncViewport, { passive: true });
+      requestAnimationFrame(() => requestAnimationFrame(syncViewport));
+    })();
+    (() => {
+      const quality = new URLSearchParams(location.search).get("q") || "balanced";
+      const fps = quality === "full" ? 60 : quality === "saver" ? 30 : 45;
+      document.documentElement.dataset.promxQuality = quality;
+      if (quality !== "full") document.documentElement.dataset.reduceMotion = "uiMicroMotion";
+      // Android WebView 113 can stop issuing callbacks through the standard RAF entry
+      // after the first WebGL frame. The WebKit alias remains the real native scheduler.
+      const nativeRaf = window.webkitRequestAnimationFrame?.bind(window);
+      const nativeCancel = window.webkitCancelAnimationFrame?.bind(window);
+      if (nativeRaf) window.requestAnimationFrame = nativeRaf;
+      if (nativeCancel) window.cancelAnimationFrame = nativeCancel;
+      window.PromXStageQuality = { name: quality, fps };
+    })();
+  </script>
+  <script type="module" crossorigin src="./assets/promx-stage-Dyt3EP73.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-hePW80VL.js">
+  <link rel="modulepreload" crossorigin href="./assets/react-Cvdyeg_0.js">
+  <link rel="modulepreload" crossorigin href="./assets/react-dom-B-VxWsjA.js">
+  <link rel="modulepreload" crossorigin href="./assets/db-DKXw59yr.js">
+  <link rel="modulepreload" crossorigin href="./assets/playerBottomBarLayout-CrjT5ik9.js">
+  <link rel="modulepreload" crossorigin href="./assets/createLucideIcon-CQY2ECfR.js">
+  <link rel="modulepreload" crossorigin href="./assets/check-DR5FO8dY.js">
+  <link rel="modulepreload" crossorigin href="./assets/chevron-down-Bw11LGOp.js">
+  <link rel="modulepreload" crossorigin href="./assets/chevron-right-BQ3h_dDd.js">
+  <link rel="modulepreload" crossorigin href="./assets/info-IhrE3UXV.js">
+  <link rel="modulepreload" crossorigin href="./assets/storagePrimitives-1Z0kv7xK.js">
+  <link rel="modulepreload" crossorigin href="./assets/colorMix-08vn8-lY.js">
+  <link rel="modulepreload" crossorigin href="./assets/usePlayerChromeSettingsStore-BDqhKRVW.js">
+  <link rel="modulepreload" crossorigin href="./assets/visualizerModes-y4GDa6Ng.js">
+  <link rel="modulepreload" crossorigin href="./assets/lyricRenderQuality-MuCcCtwi.js">
+  <link rel="modulepreload" crossorigin href="./assets/tuningDefinition-DQj_YwpU.js">
+  <link rel="modulepreload" crossorigin href="./assets/renderHints-C-Jy9oVj.js">
+  <link rel="modulepreload" crossorigin href="./assets/pixiTextureBudget-DiET7mUc.js">
+  <link rel="modulepreload" crossorigin href="./assets/visualizerSeedHash-B_9OLhx6.js">
+  <link rel="modulepreload" crossorigin href="./assets/preload-helper-uBIymjUX.js">
+  <link rel="modulepreload" crossorigin href="./assets/motionSignals-BxoZFpaw.js">
+  <link rel="modulepreload" crossorigin href="./assets/wordSegmentation-BNwjaWzh.js">
+  <link rel="modulepreload" crossorigin href="./assets/providerRegistry-DfGJ_2Mv.js">
+  <link rel="modulepreload" crossorigin href="./assets/layout-DTcA5SQ7.js">
+  <link rel="modulepreload" crossorigin href="./assets/rich-inline-QYxYVrJ1.js">
+  <link rel="modulepreload" crossorigin href="./assets/alternateText-BieoZVFZ.js">
+  <link rel="modulepreload" crossorigin href="./assets/subtitleTrackStyle-B8nybXX5.js">
+  <link rel="stylesheet" crossorigin href="./assets/usePlayerChromeSettingsStore-QTgsb78Q.css">
+  <link rel="stylesheet" crossorigin href="./assets/promx-stage-8cB-OoPT.css">
+  <link rel="stylesheet" crossorigin href="./promx-runtime.css">
+</head>
+<body>
+  <div id="root"></div>
+  <script src="./promx-runtime.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站 播放与评论：把「视频」当作音源时最容易踩的两个坑都在这里处理
+// 哔哩哔哩 播放与评论：把「视频」当作音源时最容易踩的两个坑都在这里处理
 //   1) 部分视频没有 dash 音轨 → 回退到 durl 的 mp4（ExoPlayer 能直接解出音轨）
 //   2) 评论要按「aid（数字）」查，不是 bvid
 package io.github.currencortex.music.core.alt
@@ -9,6 +9,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
+import java.util.zip.InflaterInputStream
 
 object BiliPlayback {
     /** 最近一次字幕抓取的诊断信息（bvid / 语言 / 行数），显示在歌词管理里 */
@@ -20,8 +23,24 @@ object BiliPlayback {
     data class Creator(val mid: Long, val name: String, val avatar: String, val sign: String, val fans: Long, val videos: Int)
     data class RelatedVideo(val bvid: String, val title: String, val cover: String, val owner: String, val durationSec: Int)
 
-    data class VideoInfo(val cid: String, val aid: String, val durationSec: Int, val title: String,
-        val cover: String = "", val owner: String = "")
+    data class Page(val cid: String, val page: Int, val title: String, val durationSec: Int)
+
+    data class VideoInfo(
+        val cid: String,
+        val aid: String,
+        val durationSec: Int,
+        val title: String,
+        val cover: String = "",
+        val owner: String = "",
+        val ownerFace: String = "",
+        val pages: List<Page> = emptyList(),
+        val description: String = "",
+        val publishedAt: Long = 0L,
+        val ownerMid: Long = 0L,
+        val category: String = "",
+    )
+
+    data class Danmaku(val timeMs: Long, val mode: Int, val fontScale: Float, val color: Int, val text: String)
 
     private fun open(url: String, cookie: String = ""): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
@@ -31,7 +50,7 @@ object BiliPlayback {
             connectTimeout = 12000; readTimeout = 15000
         }
 
-    /** B站 评论正文里带 HTML 实体（&#34; &amp; 等），显示前要还原 */
+    /** 哔哩哔哩 评论正文里带 HTML 实体（&#34; &amp; 等），显示前要还原 */
     private fun decodeEntities(text: String): String = text
         .replace("&#34;", "\"").replace("&quot;", "\"")
         .replace("&#39;", "'").replace("&apos;", "'")
@@ -42,7 +61,7 @@ object BiliPlayback {
         open(url, cookie).inputStream.bufferedReader().use { it.readText() }
 
     /** bvid → cid / aid（播放与评论都要） */
-    /** 观看历史（B站 的「最近播放」） */
+    /** 观看历史（哔哩哔哩 的「最近播放」） */
     fun history(cookie: String = "", limit: Int = 30): List<RelatedVideo> = runCatching {
         val body = BiliWbi.get("/x/web-interface/history/cursor",
             mapOf("ps" to limit.toString(), "type" to "archive"), cookie) ?: return emptyList()
@@ -128,12 +147,72 @@ object BiliPlayback {
             ?: return null
         val cid = data["cid"]?.jsonPrimitive?.content ?: return null
         val aid = data["aid"]?.jsonPrimitive?.content ?: return null
+        val pages = data["pages"]?.jsonArray?.mapNotNull { el ->
+            val page = el.jsonObject
+            val pageCid = page["cid"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            Page(
+                cid = pageCid,
+                page = page["page"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1,
+                title = page["part"]?.jsonPrimitive?.content.orEmpty(),
+                durationSec = page["duration"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+            )
+        }.orEmpty()
+        val owner = data["owner"]?.jsonObject
         VideoInfo(cid, aid,
             data["duration"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
-            data["title"]?.jsonPrimitive?.content ?: "",
+            decodeEntities(data["title"]?.jsonPrimitive?.content ?: ""),
             (data["pic"]?.jsonPrimitive?.content ?: "").let { if (it.startsWith("//")) "https:$it" else it },
-            data["owner"]?.jsonObject?.get("name")?.jsonPrimitive?.content.orEmpty())
+            decodeEntities(owner?.get("name")?.jsonPrimitive?.content.orEmpty()),
+            (owner?.get("face")?.jsonPrimitive?.content.orEmpty())
+                .let { if (it.startsWith("//")) "https:$it" else it },
+            pages,
+            decodeEntities(data["desc"]?.jsonPrimitive?.content.orEmpty()),
+            data["pubdate"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+            owner?.get("mid")?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+            data["tname"]?.jsonPrimitive?.content.orEmpty(),
+        )
     }.getOrNull()
+
+    /** Real quality capabilities for this exact video/account instead of a hard-coded qn list. */
+    fun qualityOptions(bvid: String, cid: String, cookie: String = ""): List<BiliQuality.Option> = runCatching {
+        val body = BiliWbi.get("/x/player/wbi/playurl", mapOf(
+            "bvid" to bvid,
+            "cid" to cid,
+            "qn" to BiliQuality.preferredQn.toString(),
+            "fnver" to "0",
+            "fnval" to "4048",
+            "fourk" to "1",
+        ), cookie) ?: return emptyList()
+        val data = kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject["data"]?.jsonObject
+            ?: return emptyList()
+        BiliQuality.optionsFromPlayurl(data)
+    }.getOrDefault(emptyList())
+
+    /** Fetch and parse the public XML danmaku track for a CID. */
+    fun danmaku(cid: String): List<Danmaku> = runCatching {
+        if (cid.isBlank()) return@runCatching emptyList()
+        val connection = open("https://comment.bilibili.com/$cid.xml").apply {
+            setRequestProperty("Accept-Encoding", "gzip, deflate")
+        }
+        val bytes = connection.inputStream.use { it.readBytes() }
+        val decoded = when {
+            bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte() ->
+                GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader().use { it.readText() }
+            bytes.size >= 2 && bytes[0] == 0x78.toByte() ->
+                InflaterInputStream(ByteArrayInputStream(bytes)).bufferedReader().use { it.readText() }
+            else -> bytes.toString(Charsets.UTF_8)
+        }
+        Regex("<d p=\"([^\"]+)\">([\\s\\S]*?)</d>").findAll(decoded).mapNotNull { match ->
+            val values = match.groupValues[1].split(',')
+            if (values.size < 4) return@mapNotNull null
+            val seconds = values[0].toDoubleOrNull() ?: return@mapNotNull null
+            val mode = values[1].toIntOrNull() ?: return@mapNotNull null
+            val size = values[2].toFloatOrNull() ?: 25f
+            val color = values[3].toLongOrNull()?.toInt() ?: 0xFFFFFF
+            val text = decodeEntities(match.groupValues[2]).trim()
+            if (text.isBlank()) null else Danmaku((seconds * 1000).toLong(), mode, size, color, text)
+        }.take(4_000).toList()
+    }.getOrDefault(emptyList())
 
     /**
      * 取可播放地址：
@@ -164,7 +243,7 @@ object BiliPlayback {
         else -> "MP4"
     }
 
-    /** html5 通道：返回 mp4（自带音轨），B站 对这条通道的签名在本机可用 */
+    /** html5 通道：返回 mp4（自带音轨），哔哩哔哩 对这条通道的签名在本机可用 */
     private fun html5Mp4(bvid: String, cid: String, cookie: String, qn: Int = 80): Pair<String, String>? = runCatching {
         val body = get("https://api.bilibili.com/x/player/playurl?bvid=$bvid&cid=$cid&fnval=0&fnver=0&fourk=1&platform=html5&qn=$qn", cookie)
         val data = kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject["data"]?.jsonObject
@@ -218,14 +297,26 @@ object BiliPlayback {
     fun playable(bvid: String, cid: String, cookie: String = ""): String? = resolve(bvid, cid, cookie).url
 
     /** 视频的互动数据：收藏 / 评论 / 点赞 / 播放 */
-    data class Stats(val favorite: Long, val reply: Long, val like: Long, val view: Long)
+    data class Stats(
+        val favorite: Long,
+        val reply: Long,
+        val like: Long,
+        val view: Long,
+        val danmaku: Long = 0L,
+    )
 
     fun stats(bvid: String, cookie: String = ""): Stats? = runCatching {
         val body = get("https://api.bilibili.com/x/web-interface/view?bvid=$bvid", cookie)
         val st = kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject["data"]
             ?.jsonObject?.get("stat")?.jsonObject ?: return null
         fun n(k: String) = st[k]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
-        Stats(favorite = n("favorite"), reply = n("reply"), like = n("like"), view = n("view"))
+        Stats(
+            favorite = n("favorite"),
+            reply = n("reply"),
+            like = n("like"),
+            view = n("view"),
+            danmaku = n("danmaku"),
+        )
     }.getOrNull()
 
     data class VideoSource(val url: String, val quality: String)
@@ -291,7 +382,7 @@ object BiliPlayback {
         }.getOrNull()
     }.getOrNull()
 
-    /** 给 B站 评论点赞/取消（action=1 赞，0 取消），需要登录 + csrf */
+    /** 给 哔哩哔哩 评论点赞/取消（action=1 赞，0 取消），需要登录 + csrf */
     fun likeComment(aid: String, rpid: String, like: Boolean, cookie: String, csrf: String): Boolean = runCatching {
         val c = (java.net.URL("https://api.bilibili.com/x/v2/reply/action").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -308,11 +399,19 @@ object BiliPlayback {
     }.getOrDefault(false)
 
 
-    // —— 以下取流链路移植自 Bilight（MIT）core/BiliRepository.kt 的 playback/parsedDashManifest ——
+    // —— DASH composition follows the playback/parsedDashManifest model used by Bilimiao ——
     data class Track(val url: String, val id: Int, val codecs: String, val bandwidth: Long,
                      val indexRange: String, val initialization: String, val width: Int = 0, val height: Int = 0)
 
-    data class Plan(val video: Track?, val audio: Track?, val mp4: String?, val durationSec: Double, val quality: String)
+    data class Plan(
+        val video: Track?,
+        val audio: Track?,
+        val mp4: String?,
+        val durationSec: Double,
+        val quality: String,
+        val qualityQn: Int = 0,
+        val availableQualities: List<BiliQuality.Option> = emptyList(),
+    )
 
     private fun parseTrack(o: kotlinx.serialization.json.JsonObject): Track? {
         val url = (o["baseUrl"] ?: o["base_url"])?.jsonPrimitive?.content ?: return null
@@ -335,7 +434,7 @@ object BiliPlayback {
         )
     }
 
-    /** wbi 签名的 playurl：优先 dash 的 avc 视频 + mp4a 音频，失败退 fnval=1 的整段 mp4 */
+    /** wbi playurl: choose the DASH track at the user's permission-aware quality. */
     fun plan(bvid: String, cid: String, preferred: Int = 80, cookie: String = ""): Plan? {
         fun read(fnval: String): kotlinx.serialization.json.JsonObject? {
             val body = BiliWbi.get("/x/player/wbi/playurl",
@@ -349,19 +448,33 @@ object BiliPlayback {
 
         fun fromDash(data: kotlinx.serialization.json.JsonObject): Plan? {
             val dash = data["dash"]?.jsonObject ?: return null
-            val videos = dash["video"]?.jsonArray?.mapNotNull { parseTrack(it.jsonObject) }
-                ?.filter { it.codecs.startsWith("avc") } ?: emptyList()
+            val videos = dash["video"]?.jsonArray?.mapNotNull { parseTrack(it.jsonObject) } ?: emptyList()
             if (videos.isEmpty()) return null
             val audio = dash["audio"]?.jsonArray?.mapNotNull { parseTrack(it.jsonObject) }
-                ?.filter { it.codecs.startsWith("mp4a") && it.indexRange.isNotBlank() && it.initialization.isNotBlank() }
+                ?.filter { it.codecs.startsWith("mp4a") }
                 ?.maxByOrNull { it.bandwidth }
-            val video = videos.filter { it.indexRange.isNotBlank() && it.initialization.isNotBlank() }
-                .maxByOrNull { it.bandwidth } ?: return null
-            val quality = when (video.id) {
-                6, 16 -> "360P"; 32 -> "480P"; 64, 74 -> "720P"; 80 -> "1080P"; 112, 116, 120 -> "1080P+"
-                else -> "视频"
-            }
-            return Plan(video, audio, null, dash["duration"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0, quality)
+            // Bilibili may return below the requested qn when the account lacks that tier.
+            // Select the highest advertised id not above the request, then prefer H.264 among
+            // codecs sharing that id so older hardware has the best chance of decoding it.
+            val atOrBelow = videos.filter { it.id <= preferred }
+            val selectedId = atOrBelow.maxOfOrNull { it.id } ?: videos.minOf { it.id }
+            val video = videos.filter { it.id == selectedId }.sortedWith(compareBy<Track> {
+                when {
+                    it.codecs.startsWith("avc") -> 0
+                    it.codecs.startsWith("hev") || it.codecs.startsWith("hvc") -> 1
+                    else -> 2
+                }
+            }.thenByDescending { it.bandwidth }).firstOrNull() ?: return null
+            val qualities = BiliQuality.optionsFromPlayurl(data)
+            return Plan(
+                video = video,
+                audio = audio,
+                mp4 = null,
+                durationSec = dash["duration"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
+                quality = BiliQuality.label(video.id),
+                qualityQn = video.id,
+                availableQualities = qualities,
+            )
         }
 
         fun fromMp4(data: kotlinx.serialization.json.JsonObject): Plan? {
@@ -370,12 +483,22 @@ object BiliPlayback {
             if (!url.contains(".mp4")) return null
             val q = data["quality"]?.jsonPrimitive?.content?.toIntOrNull()
             val label = when (q) { 6, 16 -> "360P"; 32 -> "480P"; 64, 74 -> "720P"; 80 -> "1080P"; else -> "MP4" }
-            return Plan(null, null, url, 0.0, label)
+            return Plan(null, null, url, 0.0, label, q ?: 0)
         }
 
-        // 先要带画面的整段 mp4（html5 通道，实测能出画），拿不到才退 dash
-        read("1")?.let { d -> fromMp4(d)?.let { return it } }
-        read("4048")?.let { d -> fromDash(d)?.let { return it } }
+        // DASH preserves Bilibili's higher quality tiers, but playurl can still return signed
+        // track URLs that reject this session. Probe both tracks before exposing them to ExoPlayer;
+        // otherwise video mode fails with a late HTTP 403 instead of trying the progressive MP4.
+        read("4048")?.let { d ->
+            fromDash(d)?.takeIf { plan ->
+                listOfNotNull(plan.video, plan.audio).all { probe(it.url, cookie) in 200..299 }
+            }?.let { return it }
+        }
+        read("1")?.let { d ->
+            fromMp4(d)?.takeIf { plan ->
+                plan.mp4?.let { probe(it, cookie) in 200..299 } == true
+            }?.let { return it }
+        }
         return null
     }
 
@@ -393,13 +516,20 @@ object BiliPlayback {
                 "<Representation id=\"${t.id}\" codecs=\"${xml(t.codecs)}\" bandwidth=\"${t.bandwidth}\" $dims>" +
                 "<BaseURL>${xml(t.url)}</BaseURL>$segBase</Representation></AdaptationSet>"
         }
-        val dur = plan.durationSec.takeIf { it > 0 } ?: 0.0
+        val dur = plan.durationSec.takeIf { it > 0 }
         val video = plan.video?.let { adaptation(it, true) }.orEmpty()
         val audio = plan.audio?.let { adaptation(it, false) }.orEmpty()
+        val durationAttribute = dur?.let { " mediaPresentationDuration=\"PT${it}S\"" }.orEmpty()
+        val periodDuration = dur?.let { " duration=\"PT${it}S\"" }.orEmpty()
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
-            "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\" minBufferTime=\"PT1.5S\" " +
-            "mediaPresentationDuration=\"PT${dur}S\" profiles=\"urn:mpeg:dash:profile:isoff-on-demand:2011\">" +
-            "<Period duration=\"PT${dur}S\">$video$audio</Period></MPD>"
+            "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\" minBufferTime=\"PT1.5S\"" +
+            durationAttribute + " profiles=\"urn:mpeg:dash:profile:isoff-on-demand:2011\">" +
+            "<Period$periodDuration>$video$audio</Period></MPD>"
+    }
+
+    fun manifestDataUri(plan: Plan): String {
+        val encoded = java.util.Base64.getEncoder().encodeToString(manifestOf(plan).toByteArray(Charsets.UTF_8))
+        return "data:application/dash+xml;base64,$encoded"
     }
 
     data class Comment(val id: String, val user: String, val avatar: String, val content: String,
@@ -421,7 +551,7 @@ object BiliPlayback {
             val member = o["member"]?.jsonObject
             Comment(
                 id = o["rpid"]?.jsonPrimitive?.content ?: o["rpid_str"]?.jsonPrimitive?.content.orEmpty(),
-                user = member?.get("uname")?.jsonPrimitive?.content ?: "B站用户",
+                user = member?.get("uname")?.jsonPrimitive?.content ?: "哔哩哔哩用户",
                 avatar = (member?.get("avatar")?.jsonPrimitive?.content ?: "")
                     .let { if (it.startsWith("//")) "https:$it" else it },
                 content = decodeEntities(content).trim(),

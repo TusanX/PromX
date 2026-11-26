@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // 「我喜欢」的入口在每个音源下形态不同：
-//   网易云 → 喜欢列表；QQ → 喜欢列表（未登录则空）；B站 → 直接进「我喜欢」收藏夹
+//   网易云 → 喜欢列表；QQ → 喜欢列表（未登录则空）；哔哩哔哩 → 直接进「我喜欢」收藏夹
 package io.github.currencortex.music.feature.library
 
 import io.github.currencortex.music.AppContainer

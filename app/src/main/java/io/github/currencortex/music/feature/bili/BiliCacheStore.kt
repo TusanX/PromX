@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站 本地缓存：列出已下载的视频（Movies/PromX）与音频缓存目录里的文件。
+// 哔哩哔哩 本地缓存：列出已下载的视频（Movies/PromX）与音频缓存目录里的文件。
 package io.github.currencortex.music.feature.bili
 
 import android.content.Context
@@ -16,7 +16,7 @@ data class BiliCacheItem(
 )
 
 object BiliCacheStore {
-    /** 已下载的 B站 视频：统一在 App 目录，播放走 file://（content:// 交给 OkHttp 会报 Source error） */
+    /** 已下载的 哔哩哔哩 视频：统一在 App 目录，播放走 file://（content:// 交给 OkHttp 会报 Source error） */
     fun videos(context: Context): List<BiliCacheItem> {
         val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "PromX")
         return dir.listFiles()

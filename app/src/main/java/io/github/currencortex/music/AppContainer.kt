@@ -58,7 +58,7 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
         if (storageNamespace.isEmpty()) io.github.currencortex.music.core.update.WorkManagerUpdateBackground(context) else null)
     val logger = AppLogger(context)
     val musicSettings = MusicSettingsRepository(settingsStore, appScope)
-    /** B站登录态（扫码后写入） */
+    /** 哔哩哔哩登录态（扫码后写入） */
     val biliSession = io.github.currencortex.music.core.alt.BiliSessionStore(context.applicationContext)
     /** QQ 音乐登录态 */
     val qqSession = io.github.currencortex.music.core.alt.QqSessionStore(context.applicationContext)
@@ -166,8 +166,16 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
         persistServer = musicSettings::setServer, persistAccount = musicSettings::setAccount)
     val navidrome = io.github.currencortex.music.data.navidrome.NavidromeRepository(SecureTokenStore(context, ".navidrome$storageSuffix"), appScope)
     val emby = io.github.currencortex.music.data.emby.EmbyRepository(SecureTokenStore(context, ".emby$storageSuffix"), appScope)
-    val navidromeMedia = okhttp3.OkHttpClient.Builder().addInterceptor(navidrome.client.mediaInterceptor()).addInterceptor(emby.client.mediaInterceptor()).build()
+    val webDav = io.github.currencortex.music.data.connected.WebDavRepository(SecureTokenStore(context, ".webdav$storageSuffix"), appScope)
+    val musicAssistant = io.github.currencortex.music.data.connected.MusicAssistantRepository(
+        SecureTokenStore(context, ".music-assistant$storageSuffix"), appScope)
+    val connectedMedia = okhttp3.OkHttpClient.Builder()
+        .addInterceptor(navidrome.client.mediaInterceptor())
+        .addInterceptor(emby.client.mediaInterceptor())
+        .build()
+    val navidromeMedia = webDav.mediaClient(connectedMedia)
     val musicRepository = MusicRepository(apiClient, audioSettings::access, navidrome = navidrome, lx = lxSources, emby = emby,
+        webDav = webDav, musicAssistant = musicAssistant,
         biliCookie = { biliSession.cookieHeader() },
         qqCookie = { if (qqSession.loggedIn) qqSession else null })
     fun audioRequest(song: io.github.currencortex.music.data.song.Song, quality: AudioQuality): AudioRequest {
@@ -175,6 +183,11 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
             return AudioRequest(song.id, quality, 0L, navidrome.session(), "navidrome:" + navidrome.state.value.identity, song)
         if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.EMBY)
             return AudioRequest(song.id, quality, 0L, emby.session(), "emby:" + emby.state.value.identity, song)
+        if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.WEBDAV)
+            return AudioRequest(song.id, quality, 0L, webDav.session(), "webdav:" + webDav.state.value.identity, song)
+        if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.MUSIC_ASSISTANT)
+            return AudioRequest(song.id, quality, 0L, musicAssistant.session(),
+                "music-assistant:" + musicAssistant.state.value.identity, song)
         val access = audioSettings.access()
         if (access.provider == AudioProvider.NETEASE) {
             // Snapshot UID and revision together so a concurrent account switch cannot mix cache owners.
@@ -231,6 +244,11 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
             navidrome.accepts(it) && request.session == navidrome.session() && request.providerIdentity == "navidrome:" + navidrome.state.value.identity
         } ?: request.song?.takeIf { it.musicSource == io.github.currencortex.music.data.song.MusicSource.EMBY }?.let {
             emby.accepts(it) && request.session == emby.session() && request.providerIdentity == "emby:" + emby.state.value.identity
+        } ?: request.song?.takeIf { it.musicSource == io.github.currencortex.music.data.song.MusicSource.WEBDAV }?.let {
+            webDav.accepts(it) && request.session == webDav.session() && request.providerIdentity == "webdav:" + webDav.state.value.identity
+        } ?: request.song?.takeIf { it.musicSource == io.github.currencortex.music.data.song.MusicSource.MUSIC_ASSISTANT }?.let {
+            musicAssistant.accepts(it) && request.session == musicAssistant.session() &&
+                request.providerIdentity == "music-assistant:" + musicAssistant.state.value.identity
         } },
         loadTrack = { request ->
             // 取流失败时给用户一句明确的话，而不是停在暂停态
@@ -253,8 +271,12 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
         val listened = mutableMapOf<Pair<Long, RequestSession>, Long>()
         val submitted = mutableSetOf<Pair<Long, RequestSession>>()
         ListeningReportQueue(appScope,
-            currentSession = { song -> if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.NAVIDROME)
-                navidrome.session() else musicSession() },
+            currentSession = { song -> when (song.musicSource) {
+                io.github.currencortex.music.data.song.MusicSource.NAVIDROME -> navidrome.session()
+                io.github.currencortex.music.data.song.MusicSource.WEBDAV -> webDav.session()
+                io.github.currencortex.music.data.song.MusicSource.MUSIC_ASSISTANT -> musicAssistant.session()
+                else -> musicSession()
+            } },
             currentMusic = { song, ms, owner ->
                 if (ms == null) libraryRepository.recordPlay(song, owner) else libraryRepository.listen(song, ms, owner)
             },
@@ -454,10 +476,6 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
             io.github.currencortex.music.feature.lyrics.data.LyricsRequest(song, listOf(account, netease, navidrome, lyricsSettings))
         }, songLyrics.state), lyricsRepository::load, playerScope, songLyrics.state)
     val sleepTimer = io.github.currencortex.music.core.media.SleepTimer(playerController, playerScope)
-    val roomRepository = io.github.currencortex.music.data.room.RoomRepository(apiClient) { RequestSession(accountRepository.server, accountRepository.token) }
-    val roomSession = io.github.currencortex.music.core.room.RoomSession(roomRepository,
-        io.github.currencortex.music.core.room.RoomSseClient(routeServer = serverRouter::resolve), externalPlayer ?: playerController, playerScope,
-        { accountRepository.state.value.account?.id ?: 0 }, accountRepository::expired)
     internal val listenTogetherHistory = io.github.currencortex.music.data.netease.listen.NeteaseListenTogetherHistoryRepository(neteaseTransport)
     internal val listenTogetherFate = io.github.currencortex.music.data.netease.listen.NeteaseListenTogetherFateRepository(neteaseTransport)
     val listenTogether = io.github.currencortex.music.core.netease.listen.NeteaseListenTogetherSession(
@@ -470,6 +488,13 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
     val ready = CompletableDeferred<Unit>()
     val sessionRestored = CompletableDeferred<Unit>()
     init {
+        appScope.launch {
+            combine(playerController.state, playbackQueue.state) { playback, queue ->
+                queue.current to (playback.playing && !playback.showPause)
+            }.distinctUntilChanged().collect { (song, playing) ->
+                io.github.currencortex.music.feature.widget.PlayerWidgetProvider.update(context.applicationContext, song, playing)
+            }
+        }
         if (storageNamespace.isEmpty() && externalPlayer == null) playerScope.launch {
             ready.await()
             sessionRestored.await()
@@ -480,7 +505,7 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
                 val localQueue = playbackQueue.state.value
                 listenTogether.restoreAutomatically {
                     playerController.commandRevision == commands && playbackQueue.state.value == localQueue &&
-                        !playerController.state.value.showPause && roomSession.state.value.detail == null
+                        !playerController.state.value.showPause
                 }
             }
         }
@@ -537,7 +562,7 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
         }
         playerScope.launch {
             accountRepository.sessionRevision.collect {
-                audioSources.invalidate(); roomSession.disconnect(); listenTogether.disconnect()
+                audioSources.invalidate(); listenTogether.disconnect()
                 bindingRepository.clearSession(); neteaseLibrary.invalidate(); neteaseSongActions.clearSession()
             }
         }
@@ -613,6 +638,7 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
         },
     )
     override fun close() {
+        musicAssistant.close()
         todayListening.close()
         lxSources.close()
         originalAiMasterEffects.close()
@@ -622,7 +648,6 @@ class AppContainer(context: Context, storageNamespace: String = "", externalPlay
         originalSoundEffects.close()
         smartTuning.close()
         equalizer.close()
-        roomSession.disconnect()
         listenTogether.disconnect()
         appScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         playerScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()

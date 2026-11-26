@@ -35,7 +35,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             }, Modifier.weight(1f))
             HomeShortcut("歌单", MusicIcons.List, "open_playlists", { navigate("lib/playlists") }, Modifier.weight(1f))
             HomeShortcut("听歌识曲", MusicIcons.Microphone, "open_recognition", { navigate("lib/recognition") }, Modifier.weight(1f))
-            HomeShortcut(if (inRoom) "回到房间" else "一起听", MusicIcons.Headphones, "open_rooms",
+            HomeShortcut(if (inRoom) "回到一起听" else "一起听", MusicIcons.Headphones, "open_rooms",
                 { navigate("room/list") }, Modifier.weight(1f))
         }
         }

@@ -39,6 +39,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.CurrentMusic">
         <receiver android:name=".core.media.NeteaseUsbPermissionReceiver" android:exported="false" />
+        <receiver android:name=".feature.widget.PlayerWidgetProvider" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider"
+                android:resource="@xml/player_widget_info" />
+        </receiver>
+        <receiver android:name=".feature.widget.WidgetCommandReceiver" android:exported="false" />
         <provider android:name=".core.media.LocalArtworkProvider"
             android:authorities="${applicationId}.local-artwork" android:exported="false" />
         <provider android:name="androidx.core.content.FileProvider"
@@ -54,6 +62,8 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <meta-data android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
         <service android:name=".feature.recognition.RecognitionDesktopService" android:exported="false"
             android:foregroundServiceType="microphone|mediaProjection" android:stopWithTask="true" />
         <activity

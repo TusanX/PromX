@@ -8,31 +8,97 @@
  *   TOKEN_SECRET                             签发 token 的 HMAC 密钥（随机 32 字节 hex）
  */
 import crypto from 'node:crypto';
-import COS from 'cos-nodejs-sdk-v5';
+import { getObj, putObj } from './cos.mjs';
 
 const {
   TENCENT_SECRET_ID, TENCENT_SECRET_KEY, COS_BUCKET, COS_REGION,
-  SMS_SDK_APP_ID, SMS_SIGN_NAME, SMS_TEMPLATE_ID, TOKEN_SECRET,
+  SMS_SDK_APP_ID, SMS_SIGN_NAME, SMS_TEMPLATE_ID, TOKEN_SECRET, DOWNLOAD_ADMIN_TOKEN,
 } = process.env;
-
-const cos = new COS({ SecretId: TENCENT_SECRET_ID, SecretKey: TENCENT_SECRET_KEY });
 
 /* ───────── 通用 ───────── */
 const json = (code, body) => ({
   statusCode: code,
-  headers: { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' },
+  headers: {
+    'content-type': 'application/json; charset=utf-8',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': 'content-type,authorization,x-admin-token',
+    'cache-control': 'no-store',
+  },
   body: JSON.stringify(body),
 });
-const getObj = async (key) => {
-  try {
-    const r = await cos.getObject({ Bucket: COS_BUCKET, Region: COS_REGION, Key: key });
-    return JSON.parse(r.Body.toString('utf8'));
-  } catch { return null; }
+
+const safeEqual = (left, right) => {
+  const a = Buffer.from(String(left || ''));
+  const b = Buffer.from(String(right || ''));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
-const putObj = (key, obj) => cos.putObject({
-  Bucket: COS_BUCKET, Region: COS_REGION, Key: key,
-  Body: JSON.stringify(obj), ContentType: 'application/json',
-});
+
+const dayKey = (timestamp = Date.now()) => new Date(timestamp).toISOString().slice(0, 10);
+const asCount = (value) => Math.max(0, Number(value) || 0);
+
+async function recordDownload(event, body) {
+  const now = Date.now();
+  const date = dayKey(now);
+  const version = String(body.version || 'unknown').replace(/[^0-9A-Za-z._-]/g, '').slice(0, 32) || 'unknown';
+  const source = String(body.source || 'website').replace(/[^0-9A-Za-z_-]/g, '').slice(0, 32) || 'website';
+  const eventId = String(body.eventId || crypto.randomBytes(12).toString('hex')).replace(/[^0-9A-Za-z-]/g, '').slice(0, 80);
+  if (eventId.length < 8) return { duplicate: false, eventId: crypto.randomBytes(12).toString('hex') };
+  const eventKey = `analytics/downloads/events/${date}/${eventId}.json`;
+  if (await getObj(eventKey)) return { duplicate: true, eventId };
+
+  const ip = String(event.headers?.['x-forwarded-for'] || '').split(',')[0].trim() || 'local';
+  const visitor = crypto.createHmac('sha256', TOKEN_SECRET || 'prom-download-stats')
+    .update(`${date}:${ip}`).digest('hex').slice(0, 20);
+  const limitKey = `analytics/downloads/limits/${date}/${visitor}.json`;
+  const limit = await getObj(limitKey) || { count: 0 };
+  if (asCount(limit.count) >= 30) return { limited: true };
+  await putObj(limitKey, { count: asCount(limit.count) + 1 });
+
+  const ua = String(event.headers?.['user-agent'] || '');
+  const platform = /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iOS' : 'Desktop';
+  const record = { version, source, platform, at: now, date };
+  await putObj(eventKey, record);
+
+  const summaryKey = 'analytics/downloads/summary.json';
+  const summary = await getObj(summaryKey) || { total: 0, versions: {}, sources: {}, days: {}, recent: [] };
+  summary.total = asCount(summary.total) + 1;
+  summary.versions ||= {};
+  summary.sources ||= {};
+  summary.days ||= {};
+  summary.recent ||= [];
+  summary.versions[version] = asCount(summary.versions[version]) + 1;
+  summary.sources[source] = asCount(summary.sources[source]) + 1;
+  summary.days[date] = asCount(summary.days[date]) + 1;
+  summary.recent.unshift({ ...record, id: eventId });
+  summary.recent = summary.recent.slice(0, 50);
+  summary.updatedAt = now;
+  await putObj(summaryKey, summary);
+  return { duplicate: false, eventId };
+}
+
+function statsFromSummary(summary = {}) {
+  const now = new Date();
+  const today = dayKey(now.getTime());
+  const days = Object.entries(summary.days || {}).sort(([a], [b]) => a.localeCompare(b));
+  const valuesSince = (count) => {
+    const start = new Date(now);
+    start.setUTCDate(start.getUTCDate() - count + 1);
+    const startDay = dayKey(start.getTime());
+    return days.filter(([day]) => day >= startDay).reduce((total, [, value]) => total + asCount(value), 0);
+  };
+  return {
+    total: asCount(summary.total),
+    today: asCount(summary.days?.[today]),
+    last7: valuesSince(7),
+    last30: valuesSince(30),
+    versions: summary.versions || {},
+    sources: summary.sources || {},
+    days: Object.fromEntries(days.slice(-30)),
+    recent: (summary.recent || []).slice(0, 50),
+    updatedAt: asCount(summary.updatedAt),
+  };
+}
 
 /* token = base64(uid).exp.sig  */
 const b64u = (s) => Buffer.from(s).toString('base64url');
@@ -88,6 +154,25 @@ export async function main(event) {
   const uid = auth ? verify(auth) : null;
 
   try {
+    if (event.httpMethod === 'OPTIONS') return json(204, {});
+
+    if (path === '/downloads/track') {
+      if (event.httpMethod !== 'POST') return json(405, { error: 'method not allowed' });
+      const result = await recordDownload(event, body);
+      if (result.limited) return json(429, { error: 'too many requests' });
+      return json(200, { ok: true, duplicate: result.duplicate });
+    }
+
+    if (path === '/downloads/stats') {
+      if (event.httpMethod !== 'GET') return json(405, { error: 'method not allowed' });
+      const supplied = event.headers?.['x-admin-token'] || '';
+      if (!DOWNLOAD_ADMIN_TOKEN || !safeEqual(supplied, DOWNLOAD_ADMIN_TOKEN)) {
+        return json(401, { error: 'unauthorized' });
+      }
+      const summary = await getObj('analytics/downloads/summary.json');
+      return json(200, statsFromSummary(summary || {}));
+    }
+
     /* ── 邮箱 + 密码（主通道，个人认证可用，零成本）── */
     if (path === '/auth/register' || path === '/auth/login-email') {
       const email = String(body.email || '').trim().toLowerCase();

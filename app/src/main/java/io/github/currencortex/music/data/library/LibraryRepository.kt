@@ -15,6 +15,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 
+data class QqDailyHistory(val date: String, val songs: List<Song>)
+data class LibraryChart(val title: String, val intro: String, val cover: String,
+    val period: String, val total: Int, val songs: List<Song>)
+
 /** Server data is authoritative. Like toggles are serialized and rollback on failure. */
 class LibraryRepository(private val api: ApiClient, private val accountId: () -> Long,
     private val session: () -> RequestSession,
@@ -24,13 +28,32 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
     private val biliSession: (() -> io.github.currencortex.music.core.alt.BiliSessionStore?)? = null,
     private val qqSession: (() -> io.github.currencortex.music.core.alt.QqSessionStore?)? = null) {
     val statuses = MutableStateFlow<Map<Long, SongStatus>>(emptyMap())
+    private val likeStatusReconciliation = LikeStatusReconciliation()
     val revision = MutableStateFlow(0L)
     private val mutationMutex = Mutex()
     private val reads = SessionReadCache(session, { revision.value })
+    @Volatile private var biliDailyBatch: Int = 0
     val hasCurrentMusicAccount get() = accountId() > 0 && session().token != null
-    fun clearReads() = reads.clear()
+    fun clearReads() {
+        biliDailyBatch++
+        reads.clear()
+    }
     fun invalidate() { reads.clear(); revision.update { it + 1 } }
-    fun clearSession() { reads.clear(); statuses.value = emptyMap(); revision.update { it + 1 } }
+    fun clearSession() { reads.clear(); likeStatusReconciliation.reset(); statuses.value = emptyMap(); revision.update { it + 1 } }
+    private fun applyRemoteStatuses(remote: Map<Long, Boolean>, observed: Map<Long, Long>) {
+        if (remote.isEmpty()) return
+        statuses.update { old ->
+            val next = old.toMutableMap()
+            remote.forEach { (id, remoteLiked) ->
+                val existing = old[id]
+                if (existing?.pending == true) return@forEach
+                val observedVersion = observed[id] ?: return@forEach
+                val liked = likeStatusReconciliation.resolve(id, remoteLiked, observedVersion) ?: return@forEach
+                next[id] = existing?.copy(liked = liked) ?: SongStatus(liked = liked)
+            }
+            next
+        }
+    }
     private suspend inline fun <reified T> read(path: String, expected: RequestSession, query: Map<String, String> = emptyMap()): T =
         api.decode(api.request("GET", path, query, authenticated = true, expectedSession = expected))
     private suspend fun <T : Any> backgroundRead(key: String, fresh: Boolean = false, load: suspend (RequestSession) -> T): T =
@@ -45,6 +68,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
         val id = t.id.hashCode().toLong().let { if (it < 0) -it else it }
         return if (t.source == io.github.currencortex.music.core.alt.AltSource.BILIBILI) {
             Song(id = id, name = t.title, artists = t.artist + " · 哔哩哔哩", cover = t.cover,
+                durationMs = t.durationMs, video = true, viewCount = t.views, likeCount = t.likes,
+                category = t.category,
                 musicSource = io.github.currencortex.music.data.song.MusicSource.BILIBILI,
                 externalIds = io.github.currencortex.music.data.song.SongExternalIds(bilibiliBvid = t.id))
         } else {
@@ -70,58 +95,189 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                 qqMediaId = track.mediaId.takeIf(String::isNotBlank),
                 qqNumericId = track.numericId?.toString(),
                 qqMvVid = track.mvVid,
+                qqAlbumMid = track.albumMid.takeIf(String::isNotBlank),
+                qqArtistMids = track.artistMids,
             ),
+            artistIds = track.artistIds,
+            albumId = track.albumId ?: 0L,
         )
 
-    suspend fun daily(fresh: Boolean = false): Daily = backgroundRead("daily", fresh) { expected ->
-        // 模式不是网易云时，用该模式自己的公开榜单作推荐，绝不混用网易云数据
-        when (sourceOf()) {
-            io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
-            io.github.currencortex.music.data.song.MusicSource.BILIBILI -> {
-                val modeNow = sourceOf()
-                fun fetchDaily(): List<Song> = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
-                    val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
-                    val tracks = if (qq != null) io.github.currencortex.music.core.alt.QqLibrary.dailyRecommendations(
-                        qq.cookies, qq.uin) else emptyList()
-                    if (tracks.isNotEmpty()) tracks.map(::qqSong)
-                    else io.github.currencortex.music.core.alt.AltRecommend.qqHot(24).map(::trackSong)
-                } else {
-                    val cookie = biliSession?.invoke()?.let { if (it.loggedIn) it.cookieHeader() else "" } ?: ""
-                    io.github.currencortex.music.core.alt.AltRecommend.bilibiliRcmd(cookie)
-                        .ifEmpty { io.github.currencortex.music.core.alt.AltRecommend.bilibiliHot() }
-                        .map(::trackSong)
-                }
-                fun fetchForYou(): List<Song> = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
-                    val tracks = qqSession?.invoke()?.takeIf { it.loggedIn }?.let { qq ->
-                        io.github.currencortex.music.core.alt.QqLibrary.guessYouLike(qq.cookies, qq.uin)
-                    }.orEmpty()
-                    if (tracks.isNotEmpty()) tracks.map(::qqSong)
-                    else io.github.currencortex.music.core.alt.AltRecommend.qqNew(24).map(::trackSong)
-                } else io.github.currencortex.music.core.alt.AltRecommend.bilibiliHot(24).map(::trackSong)
-                var dailySongs = withContext(Dispatchers.IO) { fetchDaily() }
-                if (dailySongs.isEmpty()) {
-                    // 首屏网络未就绪时会拿空结果；重试一次，避免把空结果缓存住
-                    delay(700)
-                    dailySongs = withContext(Dispatchers.IO) { fetchDaily() }
-                }
-                val discovery = withContext(Dispatchers.IO) { fetchForYou() }
-                fun Song.identity() = "${musicSource}:${externalIds.qqMusicId ?: externalIds.bilibiliBvid ?: id}"
-                val songs = dailySongs.distinctBy { it.identity() }
-                val forYou = (discovery + dailySongs).distinctBy { it.identity() }.take(24)
-                return@backgroundRead Daily(songs, if (forYou.isEmpty()) songs else forYou, emptyList())
-            }
-            else -> Unit
+    suspend fun qqCatalog(query: String, albums: Boolean, offset: Int = 0): CatalogPage =
+        withContext(Dispatchers.IO) {
+            val page = offset / 20 + 1
+            val entries = io.github.currencortex.music.core.alt.QqLibrary.searchCatalog(
+                query, albums, page = page, limit = 20)
+            CatalogPage(entries.map { entry ->
+                CatalogEntry(entry.id, entry.name, entry.cover, entry.subtitle,
+                    io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC, entry.key)
+            }, entries.size == 20, offset + entries.size)
         }
-        val d = api.netease?.takeIf { api.nativeMediaEnabled || api.hasLocalNeteaseLogin || expected.token == null }
-            ?.let { api.decode<DailyDto>(it.daily(expected.neteaseRevision)) } ?: read<DailyDto>("daily", expected)
-        val daily = d.daily.map(SongDto::toDomain)
-        val recommended = d.forYou.map(SongDto::toDomain).distinctBy { it.id }
-        // Preserve FM/server order; fill a short batch from the already loaded daily list.
-        // This also covers legacy servers that only provide three forYou songs.
-        val forYou = if (recommended.size >= 12) recommended else
-            (recommended + daily).distinctBy { it.id }.take(12)
-        Daily(daily, forYou, d.artists)
+
+    suspend fun qqAlbum(mid: String): Album = withContext(Dispatchers.IO) {
+        val qq = qqSession?.invoke()
+        val data = io.github.currencortex.music.core.alt.QqLibrary.album(
+            mid, qq?.takeIf { it.loggedIn }?.cookieHeader().orEmpty(), qq?.uin?.ifBlank { "0" } ?: "0")
+            ?: throw ApiException(ErrorKind.NotFound)
+        Album(data.id, data.name, data.cover, data.artists, data.description, data.songs.map(::qqSong),
+            data.publishTime, data.songs.size, source = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
+            remoteKey = data.mid)
     }
+
+    suspend fun qqArtist(mid: String, offset: Int = 0): Artist = withContext(Dispatchers.IO) {
+        val qq = qqSession?.invoke()
+        val data = io.github.currencortex.music.core.alt.QqLibrary.artist(
+            mid, offset, qq?.takeIf { it.loggedIn }?.cookieHeader().orEmpty(), qq?.uin?.ifBlank { "0" } ?: "0")
+            ?: throw ApiException(ErrorKind.NotFound)
+        Artist(data.artist.id, data.artist.name, data.artist.cover, data.artist.description,
+            data.songs.map(::qqSong), data.more,
+            data.albums.map { qqAlbumModel(it) }, data.artist.albumTotal,
+            data.artist.songTotal, data.artist.description,
+            source = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
+            remoteKey = data.artist.mid, fans = data.artist.fans)
+    }
+
+    suspend fun qqArtistAlbums(mid: String, offset: Int): Pair<List<Album>, Boolean> =
+        withContext(Dispatchers.IO) {
+            val qq = qqSession?.invoke()
+            io.github.currencortex.music.core.alt.QqLibrary.artistAlbums(
+                mid, offset, qq?.takeIf { it.loggedIn }?.cookieHeader().orEmpty(), qq?.uin?.ifBlank { "0" } ?: "0")
+                .let { (albums, more) -> albums.map(::qqAlbumModel) to more }
+        }
+
+    suspend fun qqFollowedArtists(): FollowedArtistsPage = withContext(Dispatchers.IO) {
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+            ?: return@withContext FollowedArtistsPage(emptyList(), false, 0)
+        val hostUin = listOf("encrypt_uin", "encryptUin", "p_uin", "ptui_loginuin", "luin")
+            .firstNotNullOfOrNull { qq.cookies[it]?.takeIf(String::isNotBlank) } ?: qq.uin
+        val artists = io.github.currencortex.music.core.alt.QqLibrary.followedSingers(
+            hostUin, qq.cookieHeader(), qq.uin)
+        FollowedArtistsPage(artists.map {
+            FollowedArtist(it.id, it.name, it.cover, it.description, it.songTotal, it.albumTotal, it.mid)
+        }, false, artists.size)
+    }
+
+    suspend fun qqNewSongs(area: Int = 5): List<Song> = withContext(Dispatchers.IO) {
+        io.github.currencortex.music.core.alt.QqLibrary.newSongs(area).map(::qqSong)
+    }
+
+    suspend fun qqChart(id: Long, period: String): LibraryChart = withContext(Dispatchers.IO) {
+        val detail = io.github.currencortex.music.core.alt.QqLibrary.chart(id, period)
+            ?: throw ApiException(ErrorKind.NotFound)
+        LibraryChart(detail.title, detail.intro, detail.cover, detail.period,
+            detail.total, detail.songs.map(::qqSong))
+    }
+
+    private fun qqAlbumModel(data: io.github.currencortex.music.core.alt.QqLibrary.AlbumInfo) =
+        Album(data.id, data.name, data.cover, data.artists, data.description, data.songs.map(::qqSong),
+            data.publishTime, data.songs.size, source = io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
+            remoteKey = data.mid)
+
+    suspend fun daily(fresh: Boolean = false): Daily {
+        val today = java.time.LocalDate.now()
+        val modeNow = sourceOf()
+        val biliIdentity = if (modeNow == io.github.currencortex.music.data.song.MusicSource.BILIBILI)
+            biliSession?.invoke()?.profile?.mid?.toString().orEmpty() else ""
+        val batch = if (fresh) ++biliDailyBatch else biliDailyBatch
+        return backgroundRead("daily:${modeNow.name}:$today:bili:$biliIdentity", fresh) { expected ->
+            when (modeNow) {
+                io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC,
+                io.github.currencortex.music.data.song.MusicSource.BILIBILI -> {
+                    fun fetchDaily(): List<Song> = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+                        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+                        val tracks = if (qq != null) io.github.currencortex.music.core.alt.QqLibrary.dailyRecommendations(
+                            qq.cookies, qq.uin) else emptyList()
+                        val radar = io.github.currencortex.music.core.alt.QqLibrary.radar(1,
+                            qq?.cookies.orEmpty(), qq?.uin ?: "0")
+                        if (tracks.isNotEmpty() || radar.isNotEmpty()) (tracks + radar).map(::qqSong)
+                        else io.github.currencortex.music.core.alt.AltRecommend.qqHot(24).map(::trackSong)
+                    } else {
+                        val cookie = biliSession?.invoke()?.let { if (it.loggedIn) it.cookieHeader() else "" } ?: ""
+                        io.github.currencortex.music.core.alt.AltRecommend.bilibiliRcmd(
+                            cookie = cookie,
+                            limit = 36,
+                            seed = (today.toEpochDay() and Int.MAX_VALUE.toLong()).toInt(),
+                            batch = batch,
+                        ).ifEmpty { io.github.currencortex.music.core.alt.AltRecommend.bilibiliHot() }
+                            .map(::trackSong)
+                    }
+                    fun fetchForYou(): List<Song> = if (modeNow == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+                        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+                        val personalFm = qq?.let { io.github.currencortex.music.core.alt.QqLibrary.personalFm(it.cookies, it.uin) }.orEmpty()
+                        val guess = qq?.let { io.github.currencortex.music.core.alt.QqLibrary.guessYouLike(it.cookies, it.uin) }.orEmpty()
+                        val radar = io.github.currencortex.music.core.alt.QqLibrary.radar(1,
+                            qq?.cookies.orEmpty(), qq?.uin ?: "0")
+                        val tracks = (personalFm + radar + guess).distinctBy { it.mid }
+                        if (tracks.isNotEmpty()) tracks.map(::qqSong)
+                        else io.github.currencortex.music.core.alt.AltRecommend.qqNew(24).map(::trackSong)
+                    } else {
+                        val cookie = biliSession?.invoke()?.let { if (it.loggedIn) it.cookieHeader() else "" } ?: ""
+                        io.github.currencortex.music.core.alt.AltRecommend.bilibiliRcmd(
+                            cookie = cookie,
+                            limit = 24,
+                            seed = (today.toEpochDay() and Int.MAX_VALUE.toLong()).toInt() + 7,
+                            batch = batch + 1,
+                        ).ifEmpty { io.github.currencortex.music.core.alt.AltRecommend.bilibiliHot(24) }
+                            .map(::trackSong)
+                    }
+                    var dailySongs = withContext(Dispatchers.IO) { fetchDaily() }
+                    if (dailySongs.isEmpty()) {
+                        // Do not cache an empty first screen while the network is still starting.
+                        delay(700)
+                        dailySongs = withContext(Dispatchers.IO) { fetchDaily() }
+                    }
+                    val discovery = withContext(Dispatchers.IO) { fetchForYou() }
+                    fun Song.identity() = "${musicSource}:${externalIds.qqMusicId ?: externalIds.bilibiliBvid ?: id}"
+                    val songs = dailySongs.distinctBy { it.identity() }
+                    val forYou = (discovery + dailySongs).distinctBy { it.identity() }.take(24)
+                    return@backgroundRead Daily(songs, if (forYou.isEmpty()) songs else forYou, emptyList())
+                }
+                else -> Unit
+            }
+            val d = api.netease?.takeIf { api.nativeMediaEnabled || api.hasLocalNeteaseLogin || expected.token == null }
+                ?.let { api.decode<DailyDto>(it.daily(expected.neteaseRevision)) } ?: read<DailyDto>("daily", expected)
+            val daily = d.daily.map(SongDto::toDomain)
+            val recommended = d.forYou.map(SongDto::toDomain).distinctBy { it.id }
+            val forYou = if (recommended.size >= 12) recommended else
+                (recommended + daily).distinctBy { it.id }.take(12)
+            Daily(daily, forYou, d.artists)
+        }
+    }
+    suspend fun recommendedPlaylists(fresh: Boolean = false): List<Playlist> {
+        if (mode() != io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) return emptyList()
+        val qq = qqSession?.invoke()
+        val cookies = qq?.takeIf { it.loggedIn }?.cookies.orEmpty()
+        val uin = qq?.takeIf { it.loggedIn }?.uin ?: "0"
+        return withContext(Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.QqLibrary.recommendedPlaylists(20, cookies, uin).map { folder ->
+                Playlist(id = folder.id, name = folder.title, description = "QQ 音乐为你推荐", cover = folder.cover,
+                    source = "qq-recommended", ownerId = 0L, count = folder.count, songs = emptyList(), writable = false)
+            }
+        }
+    }
+
+    /** Folia daily-history endpoint. The newest available prior date is enough for the QQ home. */
+    suspend fun qqDailyHistory(): QqDailyHistory? {
+        if (mode() != io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) return null
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: return null
+        return withContext(Dispatchers.IO) {
+            val dates = io.github.currencortex.music.core.alt.QqLibrary.dailyRecommendationDates(qq.cookies, qq.uin)
+            val date = dates.firstOrNull() ?: return@withContext null
+            val songs = io.github.currencortex.music.core.alt.QqLibrary.dailyRecommendationSongs(
+                date, qq.cookies, qq.uin).map(::qqSong)
+            songs.takeIf(List<Song>::isNotEmpty)?.let { QqDailyHistory(date, it) }
+        }
+    }
+
+    suspend fun qqSimilarSongs(song: Song): List<Song> {
+        if (song.musicSource != MusicSource.QQ_MUSIC) return emptyList()
+        val numericId = song.externalIds.qqNumericId?.toLongOrNull()?.takeIf { it > 0 } ?: return emptyList()
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: return emptyList()
+        return withContext(Dispatchers.IO) {
+            io.github.currencortex.music.core.alt.QqLibrary.similarSongs(
+                numericId, qq.cookies, qq.uin).map(::qqSong)
+        }
+    }
+
     suspend fun recent(fresh: Boolean = false): List<Song> {
         if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
             val bili = biliSession?.invoke() ?: return emptyList()
@@ -144,7 +300,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
         if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
             val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: return emptyList()
             return withContext(Dispatchers.IO) {
-                io.github.currencortex.music.core.alt.QqLibrary.weeklyListening(qq.cookies, qq.uin)
+                io.github.currencortex.music.core.alt.QqLibrary.recentlyPlayed(qq.cookies, qq.uin)
+                    .ifEmpty { io.github.currencortex.music.core.alt.QqLibrary.weeklyListening(qq.cookies, qq.uin) }
                     .map(::qqSong)
             }
         }
@@ -184,7 +341,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             return tracks.map(::qqSong)
         }
         if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
-            // B站：读名为「我喜欢」的收藏夹（没有就返回空，写入时自动新建）
+            // 哔哩哔哩：读名为「我喜欢」的收藏夹（没有就返回空，写入时自动新建）
             val bili = biliSession?.invoke() ?: return emptyList()
             if (!bili.loggedIn) return emptyList()
             return withContext(Dispatchers.IO) {
@@ -292,7 +449,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                         id, cookie, qq.uin) != null
                 })
         }
-        // B站：收藏夹 id 就是列表里的 media_id，内容用 fav/resource/list 拉
+        // 哔哩哔哩：收藏夹 id 就是列表里的 media_id，内容用 fav/resource/list 拉
         if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
             val bili = biliSession?.invoke()
             if (bili != null && bili.loggedIn) {
@@ -311,7 +468,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
                         musicSource = io.github.currencortex.music.data.song.MusicSource.BILIBILI,
                         externalIds = io.github.currencortex.music.data.song.SongExternalIds(bilibiliBvid = item.bvid))
                 }
-                return Playlist(id = id, name = title.ifBlank { "哔哩哔哩收藏夹" }, description = "B站 收藏夹",
+                return Playlist(id = id, name = title.ifBlank { "哔哩哔哩收藏夹" }, description = "哔哩哔哩 收藏夹",
                     cover = songs.firstOrNull()?.cover.orEmpty(), source = "bilibili",
                     ownerId = 0L, count = songs.size, songs = songs)
             }
@@ -322,6 +479,8 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
     }
     suspend fun refreshStatus(ids: List<Long>) {
         if (ids.isEmpty()) return
+        val distinctIds = ids.distinct()
+        val observed = likeStatusReconciliation.snapshot(distinctIds)
         if (mode() == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
             val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: return
             val likedMids = runCatching {
@@ -333,120 +492,132 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             }.getOrNull() ?: return
             // Search/library song ids are stable hashes of the QQ mid.
             val hashIds = likedMids.map { mid -> mid.hashCode().toLong().let { if (it < 0) -it else it } }.toSet()
-            statuses.update { old -> old + ids.associateWith { id ->
-                old[id]?.takeIf { it.pending } ?: SongStatus(liked = id in hashIds)
-            } }
+            applyRemoteStatuses(distinctIds.associateWith { it in hashIds }, observed)
             return
         }
-        if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
-            val bili = biliSession?.invoke()?.takeIf { it.loggedIn } ?: return
-            val likedBvids = runCatching {
-                withContext(Dispatchers.IO) {
-                    val cookie = bili.cookieHeader()
-                    val folders = io.github.currencortex.music.core.alt.BiliAuth.favoriteFolders(cookie, bili.profile!!.mid)
-                    val folder = folders.firstOrNull { it.title.contains("我喜欢") } ?: folders.firstOrNull() ?: return@withContext emptySet<String>()
-                    (1..5).flatMap { page -> io.github.currencortex.music.core.alt.BiliAuth.favoriteItems(cookie, folder.id, page) }
-                        .map { it.bvid }.toSet()
-                }
-            }.getOrNull() ?: return
-            val hashIds = likedBvids.associateBy { bvid -> bvid.hashCode().toLong().let { if (it < 0) -it else it } }
-            statuses.update { old -> old + ids.associateWith { id ->
-                old[id]?.takeIf { it.pending } ?: SongStatus(liked = id in hashIds)
-            } }
-            return
-        }
+        // 哔哩哔哩红心属于视频关系状态，只能按歌曲的 bvid 读取，不能从收藏夹推断。
+        if (mode() == io.github.currencortex.music.data.song.MusicSource.BILIBILI) return
         if (accountId() == 0L) return
         val expected = session()
-        ids.distinct().chunked(100).forEach { chunk ->
+        distinctIds.chunked(100).forEach { chunk ->
             if (expected != session()) return
             val d = api.get<SongStatusDto>("songs/status", mapOf("ids" to chunk.joinToString(",")), true)
-            if (expected == session()) statuses.update { old -> old + chunk.associateWith { id ->
-                old[id]?.takeIf { it.pending } ?: SongStatus(id in d.liked, id in d.faved)
-            } }
+            if (expected == session()) applyRemoteStatuses(
+                chunk.associateWith { it in d.liked }, observed,
+            )
         }
     }
 
-    /** 用当前歌曲的 songmid 批量读 QQ 红心状态，避免每次重读整个「我喜欢」。 */
+    /** 用当前歌曲的稳定外部编号读取 QQ / 哔哩哔哩红心，避免整库刷新覆盖刚写入的状态。 */
     suspend fun refreshSongStatuses(songs: List<Song>) {
-        if (mode() != io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
-            refreshStatus(songs.map { it.id })
-            return
+        val distinct = songs.distinctBy { it.id }
+        qqSession?.invoke()?.takeIf { it.loggedIn }?.let { qq ->
+            val tracks = distinct.filter { it.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC }
+                .mapNotNull { song -> song.externalIds.qqMusicId?.let { it to song.id } }
+                .distinctBy { it.second }
+            if (tracks.isNotEmpty()) {
+                val observed = likeStatusReconciliation.snapshot(tracks.map { it.second })
+                val liked = withContext(Dispatchers.IO) {
+                    io.github.currencortex.music.core.alt.QqLibrary.likedMids(
+                        tracks.map { it.first }, qq.cookieHeader(), qq.uin)
+                }
+                if (liked.isNotEmpty()) applyRemoteStatuses(
+                    tracks.mapNotNull { (mid, id) -> liked[mid]?.let { id to it } }.toMap(), observed)
+            }
         }
-        val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: return
-        val tracks = songs.filter { it.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC }
-            .mapNotNull { song -> song.externalIds.qqMusicId?.let { it to song.id } }
-            .distinctBy { it.second }
-        if (tracks.isEmpty()) return
-        val liked = withContext(Dispatchers.IO) {
-            io.github.currencortex.music.core.alt.QqLibrary.likedMids(
-                tracks.map { it.first }, qq.cookieHeader(), qq.uin)
+        biliSession?.invoke()?.takeIf { it.loggedIn }?.let { bili ->
+            val tracks = distinct.filter { it.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI }
+                .mapNotNull { song -> song.externalIds.bilibiliBvid?.let { it to song.id } }
+                .distinctBy { it.second }
+            if (tracks.isNotEmpty()) {
+                val observed = likeStatusReconciliation.snapshot(tracks.map { it.second })
+                val remote = withContext(Dispatchers.IO) {
+                    tracks.mapNotNull { (bvid, id) ->
+                        io.github.currencortex.music.core.alt.BiliAuth.isLiked(bili.cookieHeader(), bvid)?.let { id to it }
+                    }.toMap()
+                }
+                if (remote.isNotEmpty()) applyRemoteStatuses(remote, observed)
+            }
         }
-        if (liked.isEmpty()) return
-        statuses.update { old -> old + tracks.associate { (mid, id) ->
-            id to (old[id]?.takeIf { it.pending } ?: SongStatus(liked = liked[mid] == true))
-        } }
+        val legacy = distinct.filter { it.musicSource == io.github.currencortex.music.data.song.MusicSource.NETEASE }
+        if (legacy.isNotEmpty()) refreshStatus(legacy.map { it.id })
     }
     suspend fun toggleLike(song: Song): AppResult<Unit> = changeLike(song, null)
     suspend fun setLiked(song: Song, liked: Boolean): AppResult<Unit> = changeLike(song, liked)
+    suspend fun dislikeState(song: Song): AppResult<Boolean> {
+        if (song.musicSource != io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+            return AppResult.Failure(ErrorKind.NotFound)
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn } ?: return AppResult.Failure(ErrorKind.Unauthorized)
+        val id = song.externalIds.qqNumericId?.toLongOrNull() ?: return AppResult.Failure(ErrorKind.NotFound)
+        return appResult {
+            withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.isDisliked(id, qq.cookies, qq.uin)
+                    ?: throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐不喜欢状态读取失败")
+            }
+        }
+    }
+    suspend fun setDisliked(song: Song, disliked: Boolean): AppResult<Unit> = mutationMutex.withLock {
+        if (song.musicSource != io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+            return@withLock AppResult.Failure(ErrorKind.NotFound)
+        val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
+            ?: return@withLock AppResult.Failure(ErrorKind.Unauthorized)
+        val id = song.externalIds.qqNumericId?.toLongOrNull()
+            ?: return@withLock AppResult.Failure(ErrorKind.NotFound)
+        appResult {
+            val ok = withContext(Dispatchers.IO) {
+                io.github.currencortex.music.core.alt.QqLibrary.setDisliked(id, disliked, qq.cookies, qq.uin)
+            }
+            if (!ok) throw ApiException(ErrorKind.Server,
+                userMessage = if (disliked) "QQ 音乐未能记录不喜欢" else "QQ 音乐未能撤销不喜欢")
+        }
+    }
     private suspend fun changeLike(song: Song, desired: Boolean?): AppResult<Unit> = mutationMutex.withLock {
         // QQ 音乐：收藏 = 写入「我喜欢」歌单（dirid 201）
         if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
             val qq = qqSession?.invoke()?.takeIf { it.loggedIn }
                 ?: return@withLock AppResult.Failure(ErrorKind.Unauthorized)
             val mid = song.externalIds.qqMusicId ?: return@withLock AppResult.Failure(ErrorKind.NotFound)
-            val numericId = song.externalIds.qqNumericId?.toLongOrNull()
+            val numericId = song.externalIds.qqNumericId?.toLongOrNull()?.takeIf { it > 0 }
+                ?: withContext(Dispatchers.IO) {
+                    io.github.currencortex.music.core.alt.QqExtras.resolveSongId(song.name, song.artists, mid)
+                }
                 ?: return@withLock AppResult.Failure(ErrorKind.NotFound)
             val target = desired ?: !(statuses.value[song.id]?.liked ?: false)
+            likeStatusReconciliation.beginWrite(song.id)
             return@withLock appResult {
                 val ok = withContext(Dispatchers.IO) {
                     io.github.currencortex.music.core.alt.QqLibrary.setLiked(
                         numericId, mid, target, qq.cookies, qq.uin)
                 }
                 if (!ok) throw ApiException(ErrorKind.Server, userMessage = "QQ 音乐收藏失败，请确认账号仍有效")
+                likeStatusReconciliation.confirm(song.id, target)
                 statuses.update { current ->
                     val now = current[song.id] ?: SongStatus()
-                    current + (song.id to now.copy(liked = target))
+                    current + (song.id to now.copy(liked = target, pending = false))
                 }
+                revision.update { it + 1 }
             }
         }
-        // B站模式：点赞 = 加入「我喜欢」收藏夹
+        // 哔哩哔哩红心：使用视频点赞关系；收藏夹由独立入口维护。
         if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI) {
             val bili = biliSession?.invoke()
             if (bili == null || !bili.loggedIn) return@withLock AppResult.Failure(ErrorKind.Unauthorized)
             val bvid = song.externalIds.bilibiliBvid
-                ?: return@withLock AppResult.Failure(ErrorKind.NotFound).also {
-                }
+                ?: return@withLock AppResult.Failure(ErrorKind.NotFound)
+            val target = desired ?: !(statuses.value[song.id]?.liked ?: false)
+            val csrf = bili.cookies["bili_jct"].orEmpty()
+            if (csrf.isBlank()) return@withLock AppResult.Failure(ErrorKind.Unauthorized)
             return@withLock appResult {
-                val cookie = bili.cookieHeader()
-                // B站 这个接口要的是 bili_jct 原值（换算成 bkn 反而报 CSRF 校验失败）
-                val csrf = bili.cookies["bili_jct"].orEmpty()
-                // 必须切到 IO：这里是主线程协程，直接发网络请求会抛 NetworkOnMainThread
-                val folders = withContext(Dispatchers.IO) {
-                    io.github.currencortex.music.core.alt.BiliAuth.favoriteFolders(cookie, bili.profile!!.mid)
-                }
-                // 优先写「我喜欢」收藏夹；没有就新建一个；新建失败再退回默认收藏夹
-                val folderId = folders.firstOrNull { it.title.contains("我喜欢") }?.id
-                    ?: withContext(Dispatchers.IO) {
-                        io.github.currencortex.music.core.alt.BiliAuth.createFolder(cookie, "我喜欢", csrf)
-                    }
-                    ?: folders.firstOrNull()?.id
-                    ?: throw ApiException(ErrorKind.Server, userMessage = "B站 账号下没有可用收藏夹")
-                // 服务端真实归属：本地状态可能过期，直接问一次收藏夹
-                val aid = withContext(Dispatchers.IO) {
-                    io.github.currencortex.music.core.alt.BiliPlayback.videoInfo(bvid, cookie)?.aid.orEmpty()
-                }
-                // 以「翻收藏夹内容」为准：collected/list 被风控时返回空，会永远判成“没收藏过”
-                val inside = withContext(Dispatchers.IO) {
-                    io.github.currencortex.music.core.alt.BiliAuth.isInFolder(cookie, folderId, bvid)
-                }
-                val add = desired ?: !inside
+                likeStatusReconciliation.beginWrite(song.id)
                 val ok = withContext(Dispatchers.IO) {
-                    if (add) io.github.currencortex.music.core.alt.BiliAuth.addToFolder(cookie, bvid, folderId, csrf)
-                    else io.github.currencortex.music.core.alt.BiliAuth.removeFromFolder(cookie, bvid, folderId, csrf)
+                    io.github.currencortex.music.core.alt.BiliAuth.setLiked(
+                        bili.cookieHeader(), bvid, target, csrf)
                 }
                 if (!ok) throw ApiException(ErrorKind.Server,
-                    userMessage = if (add) "B站收藏失败" else "B站取消收藏失败")
-                statuses.update { it + (song.id to SongStatus(liked = add)) }
+                    userMessage = if (target) "哔哩哔哩点赞失败" else "哔哩哔哩取消点赞失败")
+                likeStatusReconciliation.confirm(song.id, target)
+                statuses.update { current -> current + (song.id to (current[song.id] ?: SongStatus()).copy(
+                    liked = target, pending = false)) }
                 revision.update { it + 1 }
             }
         }
@@ -458,6 +629,7 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
         if (expected != session()) return@withLock AppResult.Failure(ErrorKind.Unauthorized)
         val before = statuses.value[song.id] ?: SongStatus()
         if (desired != null && before.liked == desired) return@withLock AppResult.Success(Unit)
+        likeStatusReconciliation.beginWrite(song.id)
         statuses.update { it + (song.id to before.copy(liked = !before.liked, pending = true)) }
         val result = try { appResult {
             api.request("POST", "likes/${song.id}", body = metadata(song), authenticated = true, expectedSession = expected)
@@ -466,8 +638,11 @@ class LibraryRepository(private val api: ApiClient, private val accountId: () ->
             throw cancelled
         }
         if (expected == session()) {
-            statuses.update { it + (song.id to if (result is AppResult.Success) (it[song.id] ?: before).copy(
-                liked = (result.value as? JsonObject)?.get("on")?.jsonPrimitive?.booleanOrNull ?: !before.liked, pending = false) else before) }
+            statuses.update { it + (song.id to if (result is AppResult.Success) {
+                val confirmed = (result.value as? JsonObject)?.get("on")?.jsonPrimitive?.booleanOrNull ?: !before.liked
+                likeStatusReconciliation.confirm(song.id, confirmed)
+                (it[song.id] ?: before).copy(liked = confirmed, pending = false)
+            } else before) }
             if (result is AppResult.Success) revision.update { it + 1 }
         }
         when (result) { is AppResult.Success -> AppResult.Success(Unit); is AppResult.Failure -> result }

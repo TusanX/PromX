@@ -9,13 +9,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -32,17 +35,26 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import io.github.currencortex.music.R
+import io.github.currencortex.music.ui.component.MusicCover
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
 
-internal data class PlayerMvSource(val url: String, val referer: String)
+internal data class PlayerMvSource(
+    val urls: List<String>,
+    val referer: String,
+    val headers: Map<String, String> = emptyMap(),
+    val userAgent: String = "Mozilla/5.0 (Linux; Android 13)",
+    val mimeType: String? = null,
+) {
+    constructor(url: String, referer: String) : this(listOf(url), referer)
+}
 
 /** A muted looping MV layer. Audio remains owned by MusicService and the subtitle clock stays unchanged. */
 @OptIn(UnstableApi::class)
 @Composable
 internal fun PlayerMvBackdrop(source: PlayerMvSource, playing: Boolean, active: Boolean,
-    positionMs: Long, timelineRevision: Long, onError: (String) -> Unit,
+    positionMs: Long, timelineRevision: Long, poster: String, onError: (String) -> Unit,
     modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
@@ -54,12 +66,13 @@ internal fun PlayerMvBackdrop(source: PlayerMvSource, playing: Boolean, active: 
                 .build()
         }
     }
-    val mediaSourceFactory = remember(source.referer) {
+    val mediaSourceFactory = remember(source.referer, source.headers, source.userAgent) {
         val http = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(mapOf(
-                "Referer" to source.referer,
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 13)",
-            ))
+            .setDefaultRequestProperties(buildMap {
+                put("Referer", source.referer)
+                put("User-Agent", source.userAgent)
+                putAll(source.headers)
+            })
             .setConnectTimeoutMs(12_000)
             .setReadTimeoutMs(20_000)
         DefaultMediaSourceFactory(http)
@@ -75,11 +88,17 @@ internal fun PlayerMvBackdrop(source: PlayerMvSource, playing: Boolean, active: 
             }
     }
     val latest by rememberUpdatedState(MvClock(active, positionMs))
+    var attempt by remember(source.urls) { mutableIntStateOf(0) }
+    val latestAttempt by rememberUpdatedState(attempt)
+    val currentUrl = source.urls.getOrNull(attempt) ?: source.urls.firstOrNull().orEmpty()
 
-    DisposableEffect(player) {
+    DisposableEffect(player, source.urls) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                currentError("MV 背景播放失败，请重新打开")
+                val next = latestAttempt + 1
+                android.util.Log.w("PromXMV", "candidate ${latestAttempt + 1}/${source.urls.size} failed: ${error.errorCodeName}", error)
+                if (next < source.urls.size) attempt = next
+                else currentError("MV 背景播放失败，已尝试全部线路")
             }
         }
         player.addListener(listener)
@@ -88,8 +107,12 @@ internal fun PlayerMvBackdrop(source: PlayerMvSource, playing: Boolean, active: 
             player.release()
         }
     }
-    LaunchedEffect(player, source.url) {
-        player.setMediaItem(MediaItem.fromUri(source.url))
+    LaunchedEffect(player, currentUrl) {
+        if (currentUrl.isBlank()) return@LaunchedEffect
+        val item = MediaItem.Builder().setUri(currentUrl).apply {
+            source.mimeType?.let(::setMimeType)
+        }.build()
+        player.setMediaItem(item)
         player.prepare()
         player.seekTo(positionMs.coerceAtLeast(0))
     }
@@ -100,7 +123,7 @@ internal fun PlayerMvBackdrop(source: PlayerMvSource, playing: Boolean, active: 
         val target = positionMs.coerceAtLeast(0)
         if (abs(player.currentPosition - target) > 600) player.seekTo(target)
     }
-    LaunchedEffect(player, source.url) {
+    LaunchedEffect(player, currentUrl) {
         while (isActive) {
             val clock = latest
             if (clock.active && !player.isLoading) {
@@ -112,12 +135,13 @@ internal fun PlayerMvBackdrop(source: PlayerMvSource, playing: Boolean, active: 
     }
 
     Box(modifier.background(Color.Black).testTag("player_mv_backdrop")) {
+        MusicCover(poster, Modifier.fillMaxSize(), 1080, cornerRadius = 0.dp)
         AndroidView(
             factory = { ctx ->
                 (LayoutInflater.from(ctx).inflate(R.layout.view_bili_player, null) as PlayerView).apply {
                     useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                     setKeepContentOnPlayerReset(true)
                     this.player = player
                 }

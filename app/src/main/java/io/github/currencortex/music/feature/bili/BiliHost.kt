@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// 面板宿主桥：歌曲菜单等位置不持有 Compose 状态，通过它请 App 层打开 B站 面板
+// 面板宿主桥：歌曲菜单等位置不持有 Compose 状态，通过它请 App 层打开 哔哩哔哩 面板
 package io.github.currencortex.music.feature.bili
 
 import io.github.currencortex.music.core.alt.BiliPlayback

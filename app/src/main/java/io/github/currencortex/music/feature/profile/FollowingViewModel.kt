@@ -25,6 +25,8 @@ data class FollowingFeedState(
     val releases: List<ArtistRelease> = emptyList(),
     val totalArtists: Int = 0,
     val error: String? = null,
+    val source: io.github.currencortex.music.data.song.MusicSource =
+        io.github.currencortex.music.data.song.MusicSource.NETEASE,
 )
 
 /** NetEase followed-artist releases. One failed artist must not hide the rest of the feed. */
@@ -40,7 +42,7 @@ class FollowingViewModel(val container: AppContainer) : ViewModel() {
             combine(
                 container.neteaseSessions.state,
                 container.musicSettings.state,
-            ) { account, settings -> account.loggedIn to settings.server }
+            ) { account, settings -> Triple(account.loggedIn, settings.server, settings.primarySource) }
                 .distinctUntilChanged()
                 .collect { reload() }
         }
@@ -49,19 +51,34 @@ class FollowingViewModel(val container: AppContainer) : ViewModel() {
     fun reload() {
         task?.cancel()
         val ticket = ++generation
+        val source = container.musicSettings.state.value.primarySource
         val account = container.neteaseSessions.state.value
-        if (!account.loggedIn || account.stale) {
-            state.value = FollowingFeedState(loaded = true)
+        if (source !in setOf(io.github.currencortex.music.data.song.MusicSource.NETEASE,
+                io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)) {
+            state.value = FollowingFeedState(loaded = true, source = source)
+            return
+        }
+        if (source == io.github.currencortex.music.data.song.MusicSource.NETEASE &&
+            (!account.loggedIn || account.stale)) {
+            state.value = FollowingFeedState(loaded = true, source = source)
+            return
+        }
+        if (source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC && !container.qqSession.loggedIn) {
+            state.value = FollowingFeedState(loaded = true, source = source)
             return
         }
         val previous = state.value
-        state.value = previous.copy(loading = true, error = null)
+        state.value = previous.copy(loading = true, error = null, source = source)
         task = viewModelScope.launch {
             try {
-                when (val result = appResult { container.libraryRepository.followedArtists(limit = 50) }) {
+                when (val result = appResult {
+                    if (source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+                        container.libraryRepository.qqFollowedArtists()
+                    else container.libraryRepository.followedArtists(limit = 50)
+                }) {
                     is io.github.currencortex.music.core.network.AppResult.Failure -> {
                         if (ticket == generation) state.value = previous.copy(loading = false, loaded = true,
-                            error = result.kind.message)
+                            error = result.kind.message, source = source)
                     }
                     is io.github.currencortex.music.core.network.AppResult.Success -> {
                         val page = result.value
@@ -71,7 +88,9 @@ class FollowingViewModel(val container: AppContainer) : ViewModel() {
                                 async {
                                     semaphore.withPermit {
                                         runCatching {
-                                            container.libraryRepository.artistAlbums(artist.id, 0, "time").first.firstOrNull()
+                                            if (source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+                                                container.libraryRepository.qqArtistAlbums(artist.remoteKey, 0).first.firstOrNull()
+                                            else container.libraryRepository.artistAlbums(artist.id, 0, "time").first.firstOrNull()
                                         }.getOrNull()?.let { ArtistRelease(artist, it) }
                                     }
                                 }
@@ -84,6 +103,7 @@ class FollowingViewModel(val container: AppContainer) : ViewModel() {
                             artists = page.artists,
                             releases = releases,
                             totalArtists = page.total.takeIf { it > 0 } ?: page.artists.size,
+                            source = source,
                         )
                     }
                 }

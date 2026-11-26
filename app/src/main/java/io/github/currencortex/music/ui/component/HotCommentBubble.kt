@@ -53,7 +53,7 @@ private data class HotComment(val text: String, val author: String, val likes: L
     }
     val cache = remember { mutableMapOf<Long, HotComment>() }
 
-    // B站/QQ 的评论不需要网易云登录，只有网易云歌曲才依赖登录态
+    // 哔哩哔哩/QQ 的评论不需要网易云登录，只有网易云歌曲才依赖登录态
     val needsNeteaseLogin = song?.musicSource == io.github.currencortex.music.data.song.MusicSource.NETEASE
     LaunchedEffect(song?.id, playing, netease.loggedIn, dismissed) {
         if (song == null || !playing || dismissed) return@LaunchedEffect

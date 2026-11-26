@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站 收藏夹选择器：把当前视频加入指定收藏夹（交互参考 Bilight 的 FavoriteSheet）
+// 哔哩哔哩 收藏夹选择器：把当前视频加入指定收藏夹（交互参考 Bilight 的 FavoriteSheet）
 package io.github.currencortex.music.feature.bili
 
 import androidx.compose.foundation.clickable
@@ -101,7 +101,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                     }
                 }
             }
-            if (!loading && folders.isEmpty()) Text("没有读到收藏夹，请确认已登录 B站", fontSize = 13.sp)
+            if (!loading && folders.isEmpty()) Text("没有读到收藏夹，请确认已登录 哔哩哔哩", fontSize = 13.sp)
         }
     }
 }

@@ -7,6 +7,7 @@ http.createServer(async (req, res) => {
   for await (const chunk of req) body += chunk;
   const u = new URL(req.url, 'http://localhost');
   const event = {
+    httpMethod: req.method,
     path: u.pathname,
     queryString: Object.fromEntries(u.searchParams),
     headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k.toLowerCase(), v])),

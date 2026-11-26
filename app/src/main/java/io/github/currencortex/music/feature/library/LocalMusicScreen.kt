@@ -8,9 +8,12 @@ import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -19,7 +22,10 @@ import io.github.currencortex.music.data.song.MusicSource
 import io.github.currencortex.music.data.song.Song
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextField
 
 internal fun localSongId(uri: String): Long {
     var hash = -3750763034362895579L
@@ -60,6 +66,7 @@ internal fun scanLocalMusic(context: Context): List<Song> {
 @Composable fun LocalMusicScreen(vm: LibraryDetailViewModel, library: LibraryViewModel,
     onBack: () -> Unit, navigate: (String) -> Unit, play: (List<Song>, Int) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current
     val prefs = remember(context) { context.getSharedPreferences("local_music_scan", Context.MODE_PRIVATE) }
     var folder by remember { mutableStateOf(prefs.getString("folder", null)) }
@@ -71,6 +78,10 @@ internal fun scanLocalMusic(context: Context): List<Song> {
     var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var scanning by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var editingSong by remember { mutableStateOf<Song?>(null) }
+    var duplicateGroups by remember { mutableStateOf<List<LocalAudioFingerprint.DuplicateGroup>>(emptyList()) }
+    var duplicatesOpen by remember { mutableStateOf(false) }
+    var duplicatesBusy by remember { mutableStateOf(false) }
     val canScan = folder != null || wholeDevice && allowed
     fun chooseScope(uri: String?) {
         prefs.edit().putString("folder", uri).putBoolean("whole_device", uri == null).apply()
@@ -79,7 +90,8 @@ internal fun scanLocalMusic(context: Context): List<Song> {
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             try {
-                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                context.contentResolver.takePersistableUriPermission(uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                 chooseScope(uri.toString())
             } catch (_: SecurityException) { error = "无法保留文件夹读取权限，请重新选择" }
         }
@@ -123,8 +135,15 @@ internal fun scanLocalMusic(context: Context): List<Song> {
         vm, library, onBack, navigate, play, onRename = {}, onDelete = {},
         localMusic = LocalMusicPlaylistActions(canScan, { if (!scanning) revision++ }, { scopeOpen = true }, {
             context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                android.net.Uri.parse("package:${context.packageName}")))
-        }, error, { scopeOpen = true }))
+                android.net.Uri.parse("package:" + context.packageName)))
+        }, error, { scopeOpen = true }, editTags = { editingSong = it }, findDuplicates = {
+            if (!duplicatesBusy) scope.launch {
+                duplicatesBusy = true
+                duplicatesOpen = true
+                duplicateGroups = withContext(Dispatchers.IO) { LocalAudioFingerprint.findDuplicates(context, songs) }
+                duplicatesBusy = false
+            }
+        }))
     if (scopeOpen) io.github.currencortex.music.ui.component.MusicDialog("扫描范围", onDismiss = { scopeOpen = false }) {
         io.github.currencortex.music.ui.component.MusicDestinationRow("选择文件夹", {
             scopeOpen = false
@@ -136,5 +155,77 @@ internal fun scanLocalMusic(context: Context): List<Song> {
             if (!allowed) request.launch(permission)
         }, chevron = false, modifier = androidx.compose.ui.Modifier.testTag("local_music_scan_device"))
         top.yukonga.miuix.kmp.basic.Text("文件夹模式仅扫描所选目录及其子目录，不改变当前播放队列。")
+    }
+    editingSong?.let { song ->
+        LocalTagEditDialog(song, context, onDismiss = { editingSong = null }, onSaved = { revision++ })
+    }
+    if (duplicatesOpen) io.github.currencortex.music.ui.component.MusicDialog("重复歌曲", onDismiss = { duplicatesOpen = false }) {
+        if (duplicatesBusy) Text("正在分析本地音频…")
+        else if (duplicateGroups.isEmpty()) Text("没有发现内容相同的本地歌曲。")
+        else duplicateGroups.forEachIndexed { index, group ->
+            Text("重复组 " + (index + 1) + " · " + group.songs.size + " 首")
+            group.songs.forEach { song ->
+                io.github.currencortex.music.ui.component.MusicDestinationRow(
+                    song.name,
+                    { play(group.songs, group.songs.indexOf(song)) },
+                    summary = listOf(song.artists, song.album).filter { it.isNotBlank() }.joinToString(" · "),
+                    chevron = false,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalTagEditDialog(song: Song, context: Context, onDismiss: () -> Unit, onSaved: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var loading by remember(song.localUri) { mutableStateOf(true) }
+    var saving by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var title by remember(song.localUri) { mutableStateOf(song.name) }
+    var artist by remember(song.localUri) { mutableStateOf(song.artists) }
+    var album by remember(song.localUri) { mutableStateOf(song.album) }
+    var lyrics by remember(song.localUri) { mutableStateOf("") }
+    LaunchedEffect(song.localUri) {
+        try {
+            val tags = withContext(Dispatchers.IO) { LocalTagEditor.load(context, song) }
+            title = tags.title.ifBlank { song.name }
+            artist = tags.artist
+            album = tags.album
+            lyrics = tags.lyrics
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (e: Exception) { message = e.message ?: "读取标签失败" }
+        finally { loading = false }
+    }
+    io.github.currencortex.music.ui.component.MusicDialog("编辑歌曲标签", onDismiss = { if (!saving) onDismiss() }) {
+        if (loading) {
+            Text("正在读取标签…")
+        } else {
+            TextField(title, { title = it }, label = "歌名", modifier = Modifier.fillMaxWidth())
+            TextField(artist, { artist = it }, label = "歌手", modifier = Modifier.fillMaxWidth())
+            TextField(album, { album = it }, label = "专辑", modifier = Modifier.fillMaxWidth())
+            TextField(lyrics, { lyrics = it }, label = "内嵌歌词", modifier = Modifier.fillMaxWidth())
+            message?.let { Text(it) }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                io.github.currencortex.music.ui.component.MusicTextAction(
+                    if (saving) "正在保存…" else "保存",
+                    {
+                        if (!saving) scope.launch {
+                            saving = true; message = null
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    LocalTagEditor.save(context, song, LocalTags(title, artist, album, lyrics))
+                                }
+                                onSaved(); onDismiss()
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (e: Exception) { message = e.message ?: "保存失败，文件可能没有写入权限" }
+                            finally { saving = false }
+                        }
+                    },
+                    enabled = !saving && title.isNotBlank(),
+                )
+                io.github.currencortex.music.ui.component.MusicTextAction("取消", onDismiss, enabled = !saving, destructive = true)
+            }
+        }
     }
 }

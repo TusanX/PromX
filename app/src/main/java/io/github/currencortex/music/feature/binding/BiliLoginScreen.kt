@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站账号页：版式与「网易云账号」一致，扫码登录后可读头像/昵称/等级与收藏夹。
+// 哔哩哔哩账号页：版式与「网易云账号」一致，扫码登录后可读头像/昵称/等级与收藏夹。
 package io.github.currencortex.music.feature.binding
 
 import android.graphics.Bitmap
@@ -34,7 +34,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable fun BiliLoginScreen(
     container: io.github.currencortex.music.AppContainer,
-    onBack: () -> Unit) {
+    onBack: () -> Unit,
+    onSessionChanged: () -> Unit = {},
+) {
     val context = LocalContext.current
     val store = remember { BiliSessionStore(context) }
     var account by remember { mutableStateOf(store.profile) }
@@ -84,6 +86,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                     }
                     // 登录后清掉曲库缓存，否则「歌单/我喜欢」还是登录前的空结果
                     withContext(Dispatchers.Default) { container.libraryRepository.invalidate() }
+                    onSessionChanged()
                     account = profile
                     status = when {
                         profile == null -> "登录成功，但读取账号失败（Cookie 可能不完整）"
@@ -117,11 +120,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                             if (p.face.isNotBlank()) {
                                 coil3.compose.AsyncImage(
                                     model = p.face,
-                                    contentDescription = "B站头像",
+                                    contentDescription = "哔哩哔哩头像",
                                     modifier = Modifier.size(44.dp).clip(RoundedCornerShape(22.dp)),
                                     contentScale = ContentScale.Crop)
                             }
-                            Text(p.uname.ifBlank { "B站用户" }, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                            Text(p.uname.ifBlank { "哔哩哔哩用户" }, fontSize = 17.sp, fontWeight = FontWeight.Medium)
                             Text("Lv" + p.level, fontSize = 12.sp, color = MiuixTheme.colorScheme.primary)
                         }
                         GlassActionButton(if (probing) "检测中…" else "检测收藏夹（诊断）", {
@@ -162,8 +165,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                             }
                         }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                             .testTag("bili_check_login"))
-                        GlassActionButton("退出 B站 登录", {
-                            store.clear(); account = null; status = "已退出登录"
+                        GlassActionButton("退出 哔哩哔哩 登录", {
+                            store.clear(); account = null; status = "已退出登录"; onSessionChanged()
                         }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 14.dp)
                             .testTag("bili_logout"))
                     }
@@ -178,7 +181,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                         Box(Modifier.size(232.dp).clip(RoundedCornerShape(20.dp)).testTag("bili_login_qr"),
                             contentAlignment = Alignment.Center) {
                             val bmp = qrBitmap
-                            if (bmp != null) Image(bmp.asImageBitmap(), contentDescription = "B站登录二维码",
+                            if (bmp != null) Image(bmp.asImageBitmap(), contentDescription = "哔哩哔哩登录二维码",
                                 modifier = Modifier.fillMaxSize().padding(10.dp), contentScale = ContentScale.Fit)
                             else Text(if (busy) "加载中…" else "无二维码", fontSize = 12.sp,
                                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .45f))
@@ -191,7 +194,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                 }
             }
             item {
-                Text("收藏夹会显示为歌单；「我喜欢」使用 B站 中名为「我喜欢」的收藏夹，不存在时会自动新建。",
+                Text("收藏夹会显示为歌单；「我喜欢」使用 哔哩哔哩 中名为「我喜欢」的收藏夹，不存在时会自动新建。",
                     fontSize = 12.sp, lineHeight = 19.sp,
                     color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
             }

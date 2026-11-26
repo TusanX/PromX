@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// UP 主主页 / 相关推荐：B站 视频的「歌手页」与「相似歌曲」
+// UP 主主页 / 相关推荐：哔哩哔哩 视频的「歌手页」与「相似歌曲」
 package io.github.currencortex.music.feature.bili
 
 import androidx.compose.foundation.clickable

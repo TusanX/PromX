@@ -1,6 +1,8 @@
 package io.github.currencortex.music.feature.lyrics.ui
 
 import android.os.SystemClock
+import android.app.ActivityManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -26,6 +29,7 @@ import io.github.currencortex.music.data.settings.LyricsDisplayOptions
 import io.github.currencortex.music.feature.lyrics.model.*
 import io.github.currencortex.music.feature.lyrics.timeline.*
 import io.github.currencortex.music.feature.lyrics.domain.LyricsSynchronizer
+import io.github.currencortex.music.feature.lyrics.domain.withDetectedChorus
 import io.github.currencortex.music.feature.lyrics.data.SongLyricsStore
 
 internal val LyricsPerspectiveAngle = SemanticsPropertyKey<Float>("LyricsPerspectiveAngle")
@@ -79,17 +83,28 @@ private suspend fun awaitLyricsDisplayFrame(): Long = kotlinx.coroutines.suspend
     romanization: Boolean = false, wordAnimation: Boolean = true, effects: Boolean = true,
     fontSize: Float = LyricsTypography.DEFAULT_SIZE, weightMode: LyricsWeight = LyricsWeight.CURRENT, lyricsOffsetMs: Long = 0,
     display: LyricsDisplayOptions = LyricsDisplayOptions(), minimal: Boolean = false, perspective: Boolean = false,
-    cover: String = "", mediaDurationMs: Long = 0, playbackRunning: Boolean = true) {
-    val renderedDocument = remember(document, display.immersiveRomanization) {
-        if (display.immersiveRomanization) document.withImmersiveRomanization() else document
+    cover: String = "", mediaDurationMs: Long = 0, playbackRunning: Boolean = true,
+    rhythmGlow: State<Float>? = null) {
+    val context = LocalContext.current
+    val lowRam = remember(context) {
+        (context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.isLowRamDevice == true
     }
-    if (display.style == io.github.currencortex.music.data.settings.LyricsStyle.APPLE_MUSIC) {
+    val renderQuality = remember(display.renderQuality, lowRam) {
+        effectiveLyricsRenderQuality(display.renderQuality, lowRam, android.os.Build.VERSION.SDK_INT)
+    }
+    val renderDisplay = remember(display, renderQuality) { display.withRenderQuality(renderQuality).normalized() }
+    val renderedDocument = remember(document, display.immersiveRomanization) {
+        val withChorus = document.withDetectedChorus()
+        if (display.immersiveRomanization) withChorus.withImmersiveRomanization() else withChorus
+    }
+    val renderEffects = effects && renderDisplay.blur
+    if (renderDisplay.style == io.github.currencortex.music.data.settings.LyricsStyle.APPLE_MUSIC) {
         AppleMusicLyrics(renderedDocument, position, onSeek, modifier, canSeek, translation, romanization,
-            wordAnimation, effects, LyricsTypography.normalize(fontSize), weightMode,
-            lyricsOffsetMs, display, mediaDurationMs, playbackRunning)
+            wordAnimation, renderEffects, LyricsTypography.normalize(fontSize), weightMode,
+            lyricsOffsetMs, renderDisplay, mediaDurationMs, playbackRunning)
         return
     }
-    val smokeColors = if (display.smoke || display.particles) rememberLyricsSmokeColors(cover) else null
+    val smokeColors = if (renderDisplay.smoke || renderDisplay.particles) rememberLyricsSmokeColors(cover) else null
     val size = LyricsTypography.normalize(fontSize)
     val timeline = remember(renderedDocument) { LyricsSynchronizer(renderedDocument) }
     val effectivePosition = remember(position, lyricsOffsetMs) { derivedStateOf { LyricsSynchronizer.lyricPosition(position.value, lyricsOffsetMs) } }
@@ -104,22 +119,22 @@ private suspend fun awaitLyricsDisplayFrame(): Long = kotlinx.coroutines.suspend
     val target by remember(timeline, visualPosition) { derivedStateOf { timeline.scrollTarget(visualPosition.value) } }
     val playbackTarget by remember(timeline, effectivePosition) { derivedStateOf { timeline.scrollTarget(effectivePosition.value) } }
     val interlude by remember(timeline, effectivePosition) { derivedStateOf { timeline.interlude(effectivePosition.value) } }
-    if (display.smoke || display.particles) {
+    if (renderDisplay.smoke || renderDisplay.particles) {
         SmokeLyricsStage(renderedDocument, target, effectivePosition, onSeek = {
             LyricsSynchronizer.seekPositionOrNull(it, lyricsOffsetMs, mediaDurationMs)?.let(onSeek)
         },
             modifier = modifier, canSeek = canSeek, translation = translation, romanization = romanization,
-            fontSize = size, weightMode = weightMode, display = display.normalized(), colors = smokeColors,
-            particles = display.particles)
+            fontSize = size, weightMode = weightMode, display = renderDisplay, colors = smokeColors,
+            particles = renderDisplay.particles)
         return
     }
     var followRequest by remember(renderedDocument) { mutableIntStateOf(0) }
     val browsingOffStage = remember { mutableLongStateOf(-1L) }
     Box(modifier.testTag("lyrics_panel")) {
         MonetLyricsRail(renderedDocument, target, activeLines.toSet(), Modifier.fillMaxSize(), size,
-            display.centered, minimal, perspective, effects, followRequest,
+            renderDisplay.centered, minimal, perspective, renderEffects, followRequest,
             onBrowse = { browseAnchor = it },
-            expandWindow = display.hideControls && !minimal, playbackTarget = playbackTarget) { index, browsing, tone, focused, focusIndex ->
+            expandWindow = renderDisplay.hideControls && !minimal, playbackTarget = playbackTarget) { index, browsing, tone, focused, focusIndex ->
             val line = renderedDocument.lines[index]
             // Browsing rows never self-match: bold, glow, karaoke fill and the translation slot
             // belong to the sung line alone. The selection reads through the rail tone lift only.
@@ -129,8 +144,8 @@ private suspend fun awaitLyricsDisplayFrame(): Long = kotlinx.coroutines.suspend
                     LyricsSynchronizer.seekPositionOrNull(it, lyricsOffsetMs, mediaDurationMs)?.let { target ->
                         onSeek(target); followRequest++
                     }
-                }, translation, romanization, wordAnimation, effects, size, weightMode, display, monetTone = tone,
-                browsing = browsing)
+                }, translation, romanization, wordAnimation, renderEffects, size, weightMode, renderDisplay, monetTone = tone,
+                browsing = browsing, rhythmGlow = rhythmGlow)
         }
         if (!minimal && interlude != null && browseAnchor == null)
             LyricsInterludeView(interlude!!, effectivePosition, Modifier.align(Alignment.TopStart).padding(16.dp))

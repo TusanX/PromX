@@ -125,13 +125,18 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
                     if (likeWrite?.owner != nextOwner) _likePreview.value = null
                 }
                 actionsOwner = nextOwner
-                // B站 歌曲没有网易云 id，必须在 id==null 之前处理，用视频自身的收藏数/评论数
+                // 哔哩哔哩 歌曲没有网易云 id，必须在 id==null 之前处理，用视频自身的收藏数/评论数
                 val biliSong = queue.value.current?.takeIf { it.musicSource == MusicSource.BILIBILI }
                 if (biliSong != null) {
                     val bvid = biliSong.externalIds.bilibiliBvid
                     _actions.value = PlayerSongActions(songId = biliSong.id,
-                        liked = container.libraryRepository.statuses.value[biliSong.id]?.liked == true)
+                        liked = container.libraryRepository.statuses.value[biliSong.id]?.liked)
                     if (!bvid.isNullOrBlank()) launch {
+                        container.libraryRepository.refreshSongStatuses(listOf(biliSong))
+                        val liked = container.libraryRepository.statuses.value[biliSong.id]?.liked
+                        if (liked != null) _actions.update { actions ->
+                            if (actions.songId == biliSong.id) actions.copy(liked = liked) else actions
+                        }
                         val stats = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             io.github.currencortex.music.core.alt.BiliPlayback.stats(
                                 bvid, container.biliSession.cookieHeader())
@@ -202,8 +207,11 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
                     return@collectLatest
                 }
                 supervisorScope {
-                    if (container.accountRepository.token != null)
-                        launch { appResult { container.libraryRepository.refreshStatus(listOf(queue.value.current?.id ?: id)) } }
+                    if (container.accountRepository.token != null) launch {
+                        val song = queue.value.current
+                        if (song != null) appResult { container.libraryRepository.refreshSongStatuses(listOf(song)) }
+                        else appResult { container.libraryRepository.refreshStatus(listOf(id)) }
+                    }
                     launch { val result = appResult { netease.likeCount(id) }; if (result is AppResult.Success) _actions.update { it.copy(likeCount = result.value) } }
                     launch { val result = appResult { netease.comments(id, limit = 1) }; if (result is AppResult.Success) _actions.update { it.copy(commentCount = result.value.total?.takeIf { n -> n >= 0 }) } }
                     launch { val result = appResult { netease.isLiked(id) }; if (result is AppResult.Success) _actions.update { it.copy(liked = result.value) } }
@@ -231,10 +239,14 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
         }
     }
     fun togglePrimaryLike() {
-        val song = queue.value.current?.takeUnless { it.video || it.musicSource == MusicSource.LOCAL } ?: return
-        // B站 收藏需要登录；先给一句能照做的提示，而不是笼统的“未授权”
+        val song = queue.value.current?.takeUnless { current ->
+            current.musicSource == MusicSource.LOCAL ||
+                (current.video && !(current.musicSource == MusicSource.BILIBILI &&
+                    !current.externalIds.bilibiliBvid.isNullOrBlank()))
+        } ?: return
+        // 哔哩哔哩 收藏需要登录；先给一句能照做的提示，而不是笼统的“未授权”
         if (song.musicSource == MusicSource.BILIBILI && !container.biliSession.loggedIn) {
-            container.errorNotices.show("请先到「我的 → 哔哩哔哩」扫码登录，再收藏到 B站")
+            container.errorNotices.show("请先到「我的 → 哔哩哔哩」扫码登录，再收藏到 哔哩哔哩")
             return
         }
         val owner = likeOwner()
@@ -246,7 +258,8 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
         }
         val actionId = if (song.privateLibrary) song.id else NeteaseSongActionsRepository.songId(song)
         if (song.musicSource == MusicSource.EMBY && _actions.value.takeIf { it.songId == actionId }?.liked == null) return
-        val before = if (song.privateLibrary || usesNeteaseLibrary.value)
+        val usesNeteaseLikeState = song.usesNeteaseLikeState(usesNeteaseLibrary.value)
+        val before = if (song.privateLibrary || usesNeteaseLikeState)
             _actions.value.takeIf { it.songId == actionId }?.liked == true else libraryStatuses.value[song.id]?.liked == true
         val write = LikeWrite(song, owner, if (song.emby != null) container.emby.session() else container.musicSession(), settings.value.likeMode, before, !before)
         likeWrite = write
@@ -263,7 +276,7 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
                                 throw ApiException(ErrorKind.Unauthorized)
                             if (song.musicSource == MusicSource.EMBY) return@appResult container.emby.setLiked(song, desired)
                             if (song.musicSource == MusicSource.NAVIDROME) return@appResult container.navidrome.setLiked(song, desired)
-                            // B站/QQ 歌曲必须走自己的来源，不能被网易云的 native 分支拦走
+                            // 哔哩哔哩/QQ 歌曲必须走自己的来源，不能被网易云的 native 分支拦走
                             val native = song.musicSource == MusicSource.NETEASE &&
                                 container.primaryLibrary.resolveLikeNetease()
                             if (write.session != (if (song.emby != null) container.emby.session() else container.musicSession()) || write.likeMode != settings.value.likeMode)
@@ -311,14 +324,35 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
             }
         }
     }
+    fun playQqSimilarSongs() {
+        val song = queue.value.current?.takeIf { it.musicSource == MusicSource.QQ_MUSIC } ?: return
+        if (song.externalIds.qqNumericId.isNullOrBlank()) {
+            container.errorNotices.show("当前 QQ 歌曲缺少数字编号，暂时不能生成相似歌曲电台")
+            return
+        }
+        viewModelScope.launch {
+            when (val result = appResult { container.libraryRepository.qqSimilarSongs(song) }) {
+                is AppResult.Success -> {
+                    if (queue.value.current?.id != song.id) return@launch
+                    if (result.value.isEmpty()) {
+                        container.errorNotices.show("QQ 音乐没有返回可用的相似歌曲，请先确认登录状态")
+                    } else {
+                        container.playerController.playList(result.value, 0)
+                    }
+                }
+                is AppResult.Failure -> container.errorNotices.show("相似歌曲：${result.kind.message}")
+            }
+        }
+    }
     /** 动作栏里点「评论」：由播放页监听后打开评论弹层 */
     private val _openComments = kotlinx.coroutines.flow.MutableStateFlow(0)
     val openComments: kotlinx.coroutines.flow.StateFlow<Int> = _openComments
     fun openCommentsRequest() { _openComments.value = _openComments.value + 1 }
+    fun consumeOpenCommentsRequest() { _openComments.value = 0 }
 
     fun loadComments(more: Boolean = false) {
         val song = queue.value.current ?: return
-        // B站/QQ 歌曲没有网易云 id，但评论仓库已按来源分派，所以这里用 song 取 id
+        // 哔哩哔哩/QQ 歌曲没有网易云 id，但评论仓库已按来源分派，所以这里用 song 取 id
         val id = NeteaseSongActionsRepository.songId(song)
             ?: (song.id.takeIf { song.musicSource != io.github.currencortex.music.data.song.MusicSource.NETEASE })
             ?: return
@@ -336,7 +370,7 @@ class PlayerViewModel(internal val container: AppContainer) : ViewModel() {
             replies = if (more) previous.replies else emptyMap(), retryMore = more)
         commentsJob = viewModelScope.launch {
             if (foreignSource) {
-                // 备用音源：走 SongCommentsRepository 的来源分派（B站按 aid、QQ 按数字 id）
+                // 备用音源：走 SongCommentsRepository 的来源分派（哔哩哔哩按 aid、QQ 按数字 id）
                 val result = appResult { songComments.comments(song, previous.sort, if (more) previous.nextPage else 1) }
                 if (epoch != commentsEpoch) return@launch
                 when (result) {

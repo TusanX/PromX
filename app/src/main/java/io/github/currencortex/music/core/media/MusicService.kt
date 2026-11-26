@@ -152,7 +152,13 @@ class MusicService : MediaSessionService() {
     private val readyForPreload = MutableStateFlow(false)
     private data class PreloadPlan(val request: AudioRequest, val metered: Boolean)
     private fun currentSession(song: Song? = container.playbackQueue.state.value.current) =
-        if (song?.musicSource == io.github.currencortex.music.data.song.MusicSource.NAVIDROME) container.navidrome.session() else if (song?.musicSource == io.github.currencortex.music.data.song.MusicSource.EMBY) container.emby.session() else container.musicSession()
+        when (song?.musicSource) {
+            io.github.currencortex.music.data.song.MusicSource.NAVIDROME -> container.navidrome.session()
+            io.github.currencortex.music.data.song.MusicSource.EMBY -> container.emby.session()
+            io.github.currencortex.music.data.song.MusicSource.WEBDAV -> container.webDav.session()
+            io.github.currencortex.music.data.song.MusicSource.MUSIC_ASSISTANT -> container.musicAssistant.session()
+            else -> container.musicSession()
+        }
     private fun audioRequest(song: Song, quality: AudioQuality) = container.audioRequest(song, quality)
     private fun flushListening() {
         val ms = listening.drain(SystemClock.elapsedRealtime())
@@ -170,6 +176,7 @@ class MusicService : MediaSessionService() {
         listening.update(SystemClock.elapsedRealtime(), isPlaying)
         if (isPlaying && !recorded && song != null && !song.video &&
             (if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.NAVIDROME) container.navidrome.accepts(song)
+            else if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.WEBDAV) container.webDav.accepts(song)
             else container.accountRepository.token != null ||
                 container.nativeNetease != null && container.neteaseSessions.state.value.loggedIn && !container.neteaseSessions.state.value.stale)) {
             recorded = true
@@ -619,7 +626,13 @@ class MusicService : MediaSessionService() {
         loading = scope.launch {
             audioFocusReady.await()
             when (val result = appResult { withContext(Dispatchers.IO) {
-                if (song.video) ResolvedAudio(io.github.currencortex.music.data.song.AudioSource(container.libraryRepository.mvSource(song.mv, song.videoQuality), "video", 0, 0), "")
+                if (song.video) ResolvedAudio(
+                    io.github.currencortex.music.data.song.AudioSource(
+                        container.libraryRepository.mvSource(song.mv, song.videoQuality),
+                        "video", 0, 0, source = "video",
+                    ),
+                    "",
+                )
                 else container.audioSources.resolve(audioRequest(song, container.musicSettings.snapshot().quality), refresh = refreshSource)
             } }) {
                 is AppResult.Failure -> container.playerController.state.value = container.playerController.state.value.copy(playing = false,
@@ -637,7 +650,7 @@ class MusicService : MediaSessionService() {
     inner class MusicSessionCallback : MediaSession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                .add(SessionCommand(LOAD, Bundle.EMPTY)).build()
+                .add(SessionCommand(LOAD, Bundle.EMPTY)).add(SessionCommand(PLAY_DIRECT, Bundle.EMPTY)).build()
             val remoteCommands = commands.buildUpon().add(SessionCommand(QUIESCE, Bundle.EMPTY))
                 .add(SessionCommand(ROOM_TRACK, Bundle.EMPTY)).add(SessionCommand(ROOM_SYNC, Bundle.EMPTY)).build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(remoteCommands).build()
@@ -670,6 +683,20 @@ class MusicService : MediaSessionService() {
                         pauseFade.pause(!directOutput() && player.isPlaying)
                     } else if (args.getBoolean("seek") && player.playbackState == Player.STATE_READY) player.seekTo(position)
                 }
+                PLAY_DIRECT -> {
+                    val song = ApiJson.decodeFromString<Song>(args.getString("song") ?: return@future SessionResult(SessionError.ERROR_BAD_VALUE))
+                    val url = args.getString("url") ?: return@future SessionResult(SessionError.ERROR_BAD_VALUE)
+                    val source = ApiJson.decodeFromString<io.github.currencortex.music.data.song.AudioSource>(
+                        args.getString("source") ?: return@future SessionResult(SessionError.ERROR_BAD_VALUE))
+                    loading?.cancel(); transitions.cancel(); player.pause(); resetPauseFade(); flushListening()
+                    trackedSong = song; trackedSession = currentSession(song); recorded = false
+                    player.setPlaybackSpeed(1f)
+                    engine.prepare(MediaItemFactory.create(song, url, source = source), 0, true)
+                    container.playerController.state.value = container.playerController.state.value.copy(
+                        song = song, resolving = false, loading = true, playRequested = true, playing = false,
+                        audioInfo = AudioStreamInfo.from(source), error = null, positionMs = 0, durationMs = 0)
+                    player.playWhenReady = true
+                }
                 LOAD -> prepareSong(args.getBoolean("play", true), args.getLong("position", 0),
                     refreshSource = args.getBoolean("refreshSource"))
                 else -> return@future SessionResult(SessionError.ERROR_NOT_SUPPORTED)
@@ -697,7 +724,7 @@ class MusicService : MediaSessionService() {
         super.onDestroy()
     }
     companion object {
-        const val LOAD = "currentmusic.load"
+        const val LOAD = "currentmusic.load"; const val PLAY_DIRECT = "currentmusic.playDirect"
         const val QUIESCE = "currentmusic.quiesce"; const val ROOM_TRACK = "currentmusic.roomTrack"; const val ROOM_SYNC = "currentmusic.roomSync"
         const val VIDEO_SURFACE = "io.github.currencortex.music.VIDEO_SURFACE"
     }

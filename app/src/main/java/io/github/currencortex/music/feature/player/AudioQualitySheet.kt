@@ -63,8 +63,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
         extraContent = {
             audioInfo?.let { info ->
                 Text("实际播放 · ${info.summary}", Modifier.padding(4.dp).testTag("actual_audio_source"), fontSize = 13.sp)
-                if (info.matched) Text("官方音源暂不可用，正在播放匹配音源。音质与版本以实际文件为准。",
-                    Modifier.padding(4.dp), fontSize = 12.sp)
+                info.disclosure?.let { disclosure ->
+                    Text(
+                        disclosure,
+                        Modifier.padding(4.dp).testTag("audio_source_disclosure"),
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurface.copy(alpha = .62f),
+                    )
+                }
             }
             onRefresh?.let { refresh -> MusicTextAction("重新获取音源", { afterDismiss = refresh; visible = false }, Modifier.testTag("refresh_audio_source")) }
             if (visible && song != null && insights != null && NeteaseSongActionsRepository.songId(song) != null)

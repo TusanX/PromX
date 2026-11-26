@@ -10,6 +10,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.currencortex.music.core.media.PlaybackMode
 import io.github.currencortex.music.core.media.PlayerMode
 import io.github.currencortex.music.data.song.NeteaseSongActionsRepository
+import io.github.currencortex.music.data.song.usesNeteaseLikeState
 
 @Composable internal fun PlayerSongActionsBar(vm: PlayerViewModel, onComments: () -> Unit, onQueue: () -> Unit,
     onSleep: () -> Unit, onLike: (() -> Unit)?, onEffects: (() -> Unit)? = null, onOptions: (() -> Unit)? = null) {
@@ -20,26 +21,39 @@ import io.github.currencortex.music.data.song.NeteaseSongActionsRepository
     val neteaseMain by vm.usesNeteaseLibrary.collectAsStateWithLifecycle()
     val sleep by vm.sleepTimer.state.collectAsStateWithLifecycle()
     val id = NeteaseSongActionsRepository.songId(queue.current)
-    // 备用音源（B站/QQ）没有网易云 id，但评论按钮仍应可用
+    // 备用音源（哔哩哔哩/QQ）没有网易云 id，但评论按钮仍应可用
     val foreignSource = queue.current?.musicSource?.let {
         it != io.github.currencortex.music.data.song.MusicSource.NETEASE &&
             it != io.github.currencortex.music.data.song.MusicSource.LOCAL
     } ?: false
-    val commentsAvailable = id != null || foreignSource
+    val commentsAvailable = queue.current != null &&
+        (queue.current?.video == false ||
+            (queue.current?.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI &&
+                !queue.current?.externalIds?.bilibiliBvid.isNullOrBlank())) &&
+        queue.current?.musicSource !in setOf(io.github.currencortex.music.data.song.MusicSource.LOCAL,
+            io.github.currencortex.music.data.song.MusicSource.WEBDAV,
+            io.github.currencortex.music.data.song.MusicSource.MUSIC_ASSISTANT)
     val navidrome = queue.current?.privateLibrary == true
-    // 备用音源（B站/QQ）没有网易云 id，用 Song.id 对齐，否则计数永远不显示
+    // 备用音源（哔哩哔哩/QQ）没有网易云 id，用 Song.id 对齐，否则计数永远不显示
     // 备用音源只有一个来源在播，计数直接取当前 actions（songId 在切歌瞬间可能还没对齐）
     val current = if (navidrome || foreignSource) actions else actions.takeIf { it.songId == id }
+    val usesNeteaseLikeState = queue.current?.usesNeteaseLikeState(neteaseMain) == true
     PlayerFunctionBar(actionCount = 5, transportAligned = onOptions != null) {
         // Match transport: fixed 48dp end buttons, three equally weighted middle slots.
         val middleSlot = if (onOptions != null) Modifier.weight(1f) else Modifier
         val liked = likePreview?.takeIf { it.song.id == queue.current?.id && it.song.musicSource == queue.current?.musicSource &&
             it.song.privateIdentity == queue.current?.privateIdentity }?.liked
-            ?: if (neteaseMain || navidrome) current?.liked == true else statuses[queue.current?.id]?.liked == true
+            ?: if (usesNeteaseLikeState || navidrome) current?.liked == true else statuses[queue.current?.id]?.liked == true
+        val likeEnabled = queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL &&
+            queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.WEBDAV &&
+            queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.MUSIC_ASSISTANT &&
+            (queue.current?.video == false ||
+                (queue.current?.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI &&
+                    !queue.current?.externalIds?.bilibiliBvid.isNullOrBlank())) &&
+            (queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.EMBY || current?.liked != null)
         PlayerIconButton(PlayerIcon.LIKE, if (liked) "取消喜欢" else "喜欢", vm::togglePrimaryLike,
             Modifier.testTag("player_like"), selected = liked, count = current?.likeCount,
-            showCount = true, enabled = queue.current?.video == false && queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL &&
-                (queue.current?.musicSource != io.github.currencortex.music.data.song.MusicSource.EMBY || current?.liked != null), onLongClick = onLike)
+            showCount = true, enabled = likeEnabled)
         Box(middleSlot, contentAlignment = Alignment.Center) {
             PlayerIconButton(PlayerIcon.COMMENT, "评论区", onComments, Modifier.testTag("player_comments"),
                 count = current?.commentCount, showCount = true, enabled = commentsAvailable)

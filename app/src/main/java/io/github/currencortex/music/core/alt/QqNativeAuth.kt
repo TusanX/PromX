@@ -31,9 +31,9 @@ import org.eclipse.paho.mqttv5.common.packet.UserProperty
 internal object QqNativeAuth {
     private const val MUSICU_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
     private const val MQTT_URL = "wss://mu.y.qq.com/ws/handshake"
-    private const val CLIENT_UA = "QQMusic 14090008(android 15)"
-    private const val QIMEI36 = "6c9d3cd110abca9b16311cee10001e717614"
-    private const val DEVICE_ID = "abcdef1234567890abcdef1234567890"
+    internal const val CLIENT_UA = "QQMusic 14090008(android 15)"
+    internal const val QIMEI36 = "6c9d3cd110abca9b16311cee10001e717614"
+    internal const val DEVICE_ID = "abcdef1234567890abcdef1234567890"
 
     data class Qr(val image: ByteArray, val qrcodeId: String, val expiresIn: Int,
         internal val uid: String = "", internal val sid: String = "")
@@ -174,7 +174,7 @@ internal object QqNativeAuth {
         "qm_keyst" to credential.key,
         "qqmusic_key" to credential.key,
         "tmeLoginType" to credential.loginType.toString(),
-    )
+    ) + listOfNotNull(credential.encryptUin.takeIf(String::isNotBlank)?.let { "encrypt_uin" to it }).toMap()
 
     fun cookieHeaderOf(credential: QqMusicCredential): String =
         cookiesOf(credential).entries.joinToString("; ") { "${it.key}=${it.value}" }
@@ -196,6 +196,8 @@ internal object QqNativeAuth {
             refreshToken = value["refresh_token"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             unionId = value["unionid"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             refreshKey = value["refresh_key"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            encryptUin = listOf("encryptUin", "encrypt_uin", "encryptedUin")
+                .firstNotNullOfOrNull { value[it]?.jsonPrimitive?.contentOrNull }.orEmpty(),
         )
     }
 
@@ -212,10 +214,10 @@ internal object QqNativeAuth {
             (session?.get("sid")?.jsonPrimitive?.contentOrNull.orEmpty())
     }.getOrDefault("" to "")
 
-    private fun call(module: String, method: String, param: JsonObject,
+    internal fun musicuBody(module: String, method: String, param: JsonObject,
         credential: QqMusicCredential? = null, uid: String = "", sid: String = "",
-        loginType: Int? = null, ct: Int = 11, cv: Int = 14090008): JsonObject? {
-        val body = buildJsonObject {
+        loginType: Int? = null, ct: Int = 11, cv: Int = 14090008): JsonObject =
+        buildJsonObject {
             put("comm", buildJsonObject {
                 put("ct", ct)
                 put("cv", cv)
@@ -252,6 +254,11 @@ internal object QqNativeAuth {
                 put("param", param)
             })
         }
+
+    private fun call(module: String, method: String, param: JsonObject,
+        credential: QqMusicCredential? = null, uid: String = "", sid: String = "",
+        loginType: Int? = null, ct: Int = 11, cv: Int = 14090008): JsonObject? {
+        val body = musicuBody(module, method, param, credential, uid, sid, loginType, ct, cv)
         val connection = URL(MUSICU_URL).openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("User-Agent", CLIENT_UA)
@@ -282,4 +289,5 @@ data class QqMusicCredential(
     val refreshToken: String = "",
     val unionId: String = "",
     val refreshKey: String = "",
+    val encryptUin: String = "",
 )

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.currencortex.music.data.library.*
+import io.github.currencortex.music.feature.library.albumRoute
 import io.github.currencortex.music.ui.component.*
 import io.github.currencortex.music.ui.component.nativeui.*
 import top.yukonga.miuix.kmp.basic.Text
@@ -99,11 +100,11 @@ private fun albumCaption(album: Album) = listOf(albumDate(album), if (album.size
     }
 }
 @Composable internal fun ArtistAlbumCard(album: Album, modifier: Modifier, navigate: (String) -> Unit) {
-    MusicArtworkCard(album.cover, album.name, albumDate(album), { navigate("lib/album/${album.id}") },
+    MusicArtworkCard(album.cover, album.name, albumDate(album), { navigate(albumRoute(album)) },
         modifier.testTag("catalog_entry_${album.id}"), enabled = album.id > 0, pixels = 480)
 }
 @Composable internal fun ArtistAlbumRow(album: Album, navigate: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(role = Role.Button) { navigate("lib/album/${album.id}") }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(role = Role.Button) { navigate(albumRoute(album)) }
         .testTag("catalog_entry_${album.id}").padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         MusicCover(album.cover, Modifier.size(88.dp), 240, cornerRadius = 12.dp)

@@ -174,7 +174,10 @@ class EmbyRepository(private val vault: TokenStore, scope: CoroutineScope) {
         val path = if (download) listOf("Items", ref.id, "Download") else listOf("Audio", ref.id, "stream")
         val params = if (download) emptyList() else listOf("Static" to "true") +
             ref.mediaSourceId.takeIf(String::isNotBlank)?.let { listOf("MediaSourceId" to it) }.orEmpty()
-        return AudioSource(client.media(path, params, expected), "Emby 原音质", ref.sampleRate, ref.channels, ref.format, validForSeconds = 600)
+        return AudioSource(
+            client.media(path, params, expected), "Emby 原音质", ref.sampleRate, ref.channels, ref.format,
+            validForSeconds = 600, source = "emby",
+        )
     }
     companion object { const val PAGE_SIZE = 40 }
 }

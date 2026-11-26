@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.currencortex.music.data.song.SearchLyricContext
 import io.github.currencortex.music.data.song.Song
+import io.github.currencortex.music.data.song.usesNeteaseLikeState
 import io.github.currencortex.music.feature.library.LibraryViewModel
 import io.github.currencortex.music.ui.component.*
 import io.github.currencortex.music.ui.component.nativeui.GlassIconButton
@@ -180,7 +181,8 @@ internal fun lyricMatchWindow(text: String, query: String, limit: Int = 24): Str
     val native by vm.container.primaryLibrary.likesUseNetease.collectAsStateWithLifecycle()
     val liking by vm.primaryLikeBusy.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
-    val liked = if (native) song.id in nativeLikes else statuses[song.id]?.liked == true
+    val usesNeteaseLikeState = song.usesNeteaseLikeState(native)
+    val liked = if (usesNeteaseLikeState) song.id in nativeLikes else statuses[song.id]?.liked == true
     if (showLike) {
         SearchResultIconAction(if (liked) Icons.Default.Favorite else MusicIcons.Heart,
             if (liked) "取消喜欢：${song.name}" else "喜欢：${song.name}",

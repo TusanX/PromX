@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站 模式的「本地缓存」：已下载视频 + 音频缓存占用，点条目直接播本地文件。
+// 哔哩哔哩 模式的「本地缓存」：已下载视频 + 音频缓存占用，点条目直接播本地文件。
 package io.github.currencortex.music.feature.bili
 
 import androidx.compose.foundation.background
@@ -85,7 +85,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
             }
             if (videos.isEmpty() && audios.isEmpty()) {
                 item {
-                    Text("还没有缓存。播放 B站 歌曲时点歌曲菜单里的「下载视频」，就会出现在这里。",
+                    Text("还没有缓存。播放 哔哩哔哩 歌曲时点歌曲菜单里的「下载视频」，就会出现在这里。",
                         Modifier.padding(horizontal = 16.dp, vertical = 24.dp),
                         fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
                 }
@@ -146,7 +146,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
     }
 }
 
-/** 把缓存文件包成可播放的 Song（B站 来源 + 本地路径） */
+/** 把缓存文件包成可播放的 Song（哔哩哔哩 来源 + 本地路径） */
 fun toSongForPlay(item: BiliCacheItem): Song = item.toSong()
 
 fun BiliCacheItem.toSong(): Song = Song(

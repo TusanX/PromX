@@ -12,8 +12,12 @@ import kotlinx.coroutines.flow.*
 
 data class NetworkSettingsState(val busy: Boolean = false, val message: String? = null)
 data class AudioCacheSettingsState(val busy: Boolean = false, val message: String? = null)
-class MusicSettingsViewModel(private val container: AppContainer) : ViewModel() {
+class MusicSettingsViewModel(val container: AppContainer) : ViewModel() {
     val settings = container.musicSettings.state
+    val navidromeAccount = container.navidrome.state
+    val embyAccount = container.emby.state
+    val webDavAccount = container.webDav.state
+    val musicAssistantAccount = container.musicAssistant.state
     val state = MutableStateFlow(NetworkSettingsState())
     val cacheBytes = container.audioCache.bytes
     val cacheState = MutableStateFlow(AudioCacheSettingsState())
@@ -80,6 +84,33 @@ class MusicSettingsViewModel(private val container: AppContainer) : ViewModel() 
     fun refreshCache() = viewModelScope.launch(Dispatchers.IO) {
         runCatching { container.audioCache.refreshUsage() }.onFailure {
             cacheState.value = AudioCacheSettingsState(message = "歌曲缓存暂不可用")
+        }
+    }
+    fun connectWebDav(server: String, username: String, password: String, done: (Boolean) -> Unit) =
+        connectConnected(done) { container.webDav.connect(server, username, password) }
+    fun disconnectWebDav(done: (Boolean) -> Unit = {}) =
+        connectConnected(done) { container.webDav.disconnect() }
+    fun connectMusicAssistant(server: String, token: String, done: (Boolean) -> Unit) =
+        connectConnected(done) { container.musicAssistant.connect(server, token) }
+    fun disconnectMusicAssistant(done: (Boolean) -> Unit = {}) =
+        connectConnected(done) { container.musicAssistant.disconnect() }
+    private fun connectConnected(done: (Boolean) -> Unit, block: suspend () -> Unit) = viewModelScope.launch {
+        if (state.value.busy) return@launch
+        state.value = NetworkSettingsState(busy = true)
+        try {
+            block()
+            state.value = NetworkSettingsState(message = "连接成功")
+            done(true)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (e: IllegalArgumentException) {
+            state.value = NetworkSettingsState(message = e.message ?: "连接信息不完整")
+            done(false)
+        } catch (e: io.github.currencortex.music.core.network.ApiException) {
+            state.value = NetworkSettingsState(message = e.userMessage ?: e.message ?: "连接失败")
+            done(false)
+        } catch (_: Exception) {
+            state.value = NetworkSettingsState(message = "连接失败，请检查地址和凭据")
+            done(false)
         }
     }
     fun preload(value: Boolean) = viewModelScope.launch { container.musicSettings.setPreload(value) }

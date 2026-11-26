@@ -114,7 +114,12 @@ class LxSourceStore(private val context: Context, private val vault: TokenStore,
             runtime.resolve(source.info, source.script, data)
         }
         val level = when (request.quality) { "flac24bit" -> "hires"; "flac" -> "lossless"; "320k" -> "exhigh"; else -> "standard" }
-        return AudioSource(url, level, 0, 0, if (request.quality.startsWith("flac")) "flac" else "mp3", validForSeconds = 30)
+        return AudioSource(
+            url, level, 0, 0,
+            if (request.quality.startsWith("flac")) "flac" else "mp3",
+            validForSeconds = 30,
+            source = "lx",
+        )
     }
     private fun save(value: List<LxStoredSource>) {
         vault.write(json.encodeToString(serializer, value))

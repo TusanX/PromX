@@ -1,12 +1,16 @@
 // Prom contributors, displayed with the LeiFetch member cards.
 package io.github.currencortex.music.core.config
 
+import io.github.currencortex.music.R
+
 data class AboutMember(
     val qq: String,
     val name: String,
     val role: String,
     val detail: String? = null,
     val githubUrl: String? = null,
+    val avatarUrl: String? = null,
+    val avatarRes: Int? = null,
 )
 
 data class AboutSection(val title: String, val members: List<AboutMember>)
@@ -14,6 +18,10 @@ data class AboutSection(val title: String, val members: List<AboutMember>)
 object AboutCredits {
     val sections = listOf(
         AboutSection("开发组", listOf(
+            AboutMember("", "TusanX", "PromX 维护 · 发行构建 · 产品体验",
+                detail = "维护 PromX 的 Android 发布构建与功能迭代，持续完善音乐来源、播放体验和界面细节。",
+                githubUrl = "https://github.com/TusanX",
+                avatarRes = R.drawable.about_tusanx),
             AboutMember("3140014249", "bileizhen", "开发 · 设计 · 维护",
                 githubUrl = "https://github.com/bileizhen"),
             AboutMember("1945826346", "Rcst20", "原项目开发",

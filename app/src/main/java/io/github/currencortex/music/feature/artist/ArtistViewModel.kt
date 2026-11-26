@@ -32,7 +32,8 @@ data class ArtistUiState(val loading: Boolean = true, val artist: Artist? = null
 }
 
 /** Public artist data: separate biography and pagination failures never hide playable songs. */
-class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
+class ArtistViewModel(val container: AppContainer, val id: Long, val qqMid: String? = null) : ViewModel() {
+    private val qq get() = !qqMid.isNullOrBlank()
     val state = MutableStateFlow(ArtistUiState())
     private val tasks = mutableMapOf<String, Job>()
     private var generation = 0
@@ -50,7 +51,9 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
         state.update { it.copy(loading = true, error = null, songsLoading = false, albumsLoading = false,
             songsError = null, albumsError = null) }
         tasks["main"] = viewModelScope.launch {
-            when (val result = appResult { container.libraryRepository.artist(id) }) {
+            when (val result = appResult {
+                if (qq) container.libraryRepository.qqArtist(qqMid!!) else container.libraryRepository.artist(id)
+            }) {
                 is AppResult.Success -> if (epoch == generation) state.update { old ->
                     val artist = result.value
                     old.copy(loading = false, artist = artist, songs = artist.songs.distinctBy(Song::id), songOffset = artist.songs.size,
@@ -65,7 +68,10 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
         loadSimilar()
         loadProfile()
         tasks["fans"] = viewModelScope.launch {
-            when (val result = appResult { container.libraryRepository.artistFans(id) }) {
+            if (qq) return@launch
+            when (val result = appResult {
+                container.libraryRepository.artistFans(id)
+            }) {
                 is AppResult.Success -> if (epoch == generation) state.update { it.copy(fans = result.value) }
                 is AppResult.Failure -> Unit // Optional public counts; never replace unknown data with zero.
             }
@@ -76,7 +82,12 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
         val epoch = generation
         state.update { it.copy(biographyLoading = true, biographyError = null) }
         tasks["bio"] = viewModelScope.launch {
-            when (val result = appResult { container.libraryRepository.artistBiography(id, fresh) }) {
+            when (val result = appResult {
+                if (qq) {
+                    val page = container.libraryRepository.qqArtist(qqMid!!)
+                    ArtistBiography(briefDesc = page.description)
+                } else container.libraryRepository.artistBiography(id, fresh)
+            }) {
                 is AppResult.Success -> if (epoch == generation) state.update { it.copy(biography = result.value, biographyLoading = false) }
                 is AppResult.Failure -> if (epoch == generation) state.update { it.copy(biographyLoading = false, biographyError = result.kind.message) }
             }
@@ -88,7 +99,10 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
         val epoch = generation
         state.update { it.copy(songsLoading = true, songsError = null) }
         tasks["songs"] = viewModelScope.launch {
-            when (val result = appResult { container.libraryRepository.artist(id, before.songOffset) }) {
+            when (val result = appResult {
+                if (qq) container.libraryRepository.qqArtist(qqMid!!, before.songOffset)
+                else container.libraryRepository.artist(id, before.songOffset)
+            }) {
                 is AppResult.Success -> if (epoch == generation) state.update {
                     val songs = (before.songs + result.value.songs).distinctBy(Song::id)
                     it.copy(songs = songs, songOffset = before.songOffset + result.value.songs.size, songsLoading = false,
@@ -115,7 +129,10 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
         val epoch = generation
         state.update { it.copy(albumsLoading = true, albumsError = null) }
         tasks["albums"] = viewModelScope.launch {
-            when (val result = appResult { container.libraryRepository.artistAlbums(id, offset, before.albumOrder) }) {
+            when (val result = appResult {
+                if (qq) container.libraryRepository.qqArtistAlbums(qqMid!!, offset)
+                else container.libraryRepository.artistAlbums(id, offset, before.albumOrder)
+            }) {
                 is AppResult.Success -> if (epoch == generation && state.value.albumOrder == before.albumOrder) state.update {
                     resetAlbums = false
                     val albums = ((if (reset) emptyList() else before.albums) + result.value.first).filter { it.id > 0 }.distinctBy(Album::id)
@@ -128,6 +145,10 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
     }
     fun moreMvs() = loadMvs(reset = resetMvs)
     private fun loadMvs(reset: Boolean) {
+        if (qq) {
+            state.update { it.copy(mvs = emptyList(), mvOffset = 0, moreMvs = false, mvsLoading = false, mvsError = null) }
+            return
+        }
         val before = state.value
         if (!reset && (before.mvsLoading || (!before.moreMvs && before.mvsError == null))) return
         tasks["mvs"]?.cancel()
@@ -149,6 +170,10 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
         }
     }
     fun loadSimilar() {
+        if (qq) {
+            state.update { it.copy(similar = emptyList(), similarLoading = false, similarError = null) }
+            return
+        }
         tasks["similar"]?.cancel()
         val epoch = generation
         state.update { it.copy(similarLoading = true, similarError = null) }
@@ -164,7 +189,13 @@ class ArtistViewModel(val container: AppContainer, val id: Long) : ViewModel() {
         val epoch = generation
         state.update { it.copy(profileLoading = true, profileError = null) }
         tasks["profile"] = viewModelScope.launch {
-            when (val result = appResult { container.libraryRepository.artistProfile(id) }) {
+            when (val result = appResult {
+                if (qq) {
+                    val page = container.libraryRepository.qqArtist(qqMid!!)
+                    ArtistProfile(name = page.name, cover = page.cover, avatar = page.cover,
+                        briefDesc = page.description, songTotal = page.songTotal, albumTotal = page.albumTotal)
+                } else container.libraryRepository.artistProfile(id)
+            }) {
                 is AppResult.Success -> if (epoch == generation) state.update { it.copy(profile = result.value, profileLoading = false) }
                 is AppResult.Failure -> if (epoch == generation) state.update { it.copy(profileLoading = false, profileError = result.kind.message) }
             }

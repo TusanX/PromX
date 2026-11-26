@@ -51,10 +51,20 @@ import kotlin.math.roundToInt
         } }
         item("lyrics") { SettingsSection("歌词样式", MusicIcons.File) {
             LyricsStyleSelector(settings.lyricsDisplay.style, vm::lyricsStyle)
-            if (settings.lyricsDisplay.style == LyricsStyle.APPLE_MUSIC) {
-                SettingsDivider()
-                MusicDestinationRow("Apple Music 自定义", { appleLyricsOpen = true },
-                    Modifier.testTag("open_apple_lyrics_settings"), summary = "字号、间距、动画速度与光效")
+            AnimatedVisibility(settings.lyricsDisplay.style != LyricsStyle.CLASSIC,
+                enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                Column {
+                    SettingsDivider()
+                    when (settings.lyricsDisplay.style) {
+                        LyricsStyle.APPLE_MUSIC -> MusicDestinationRow(
+                            "Apple Music 自定义",
+                            onClick = { appleLyricsOpen = true },
+                            modifier = Modifier.testTag("open_apple_lyrics_settings"),
+                            summary = "字号、间距、动画速度与光效",
+                        )
+                        LyricsStyle.CLASSIC -> Unit
+                    }
+                }
             }
         } }
         item("primary_source") { SettingsSection("音乐来源", MusicIcons.Download) {

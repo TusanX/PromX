@@ -10,6 +10,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onGloballyPositioned
 import io.github.currencortex.music.data.library.Playlist
+import io.github.currencortex.music.data.song.usesNeteaseLikeState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -112,7 +113,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                         // 空态文案跟随当前音源。
                         val hint = when (sourceMode) {
                             io.github.currencortex.music.data.song.MusicSource.BILIBILI ->
-                                if (vm.container.biliSession.loggedIn) "去 B站 App 里新建收藏夹，这里会自动出现"
+                                if (vm.container.biliSession.loggedIn) "去 哔哩哔哩 App 里新建收藏夹，这里会自动出现"
                                 else "到「我的 → 哔哩哔哩」扫码登录，同步收藏夹"
                             io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC ->
                                 if (vm.container.qqSession.loggedIn) "去 QQ 音乐创建歌单，回到这里下拉刷新即可同步"
@@ -140,7 +141,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
                         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(playlist.name, Modifier.weight(1f, fill = false), fontSize = 16.sp, fontWeight = FontWeight.Medium,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        // B站 模式：标出「我喜欢」写到哪个收藏夹，避免用户不知道红心去了哪
+                        // 哔哩哔哩 模式：标出「我喜欢」写到哪个收藏夹，避免用户不知道红心去了哪
                         if (playlist.source == "bilibili" && playlist.name.contains("我喜欢"))
                             Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp))
                                 .background(MiuixTheme.colorScheme.primary)
@@ -168,7 +169,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 internal data class LocalMusicPlaylistActions(val allowed: Boolean, val rescan: () -> Unit,
     val requestPermission: () -> Unit, val openSettings: () -> Unit, val permissionMessage: String? = null,
-    val chooseScope: () -> Unit = requestPermission)
+    val chooseScope: () -> Unit = requestPermission, val editTags: ((Song) -> Unit)? = null,
+    val findDuplicates: (() -> Unit)? = null)
 
 @Composable internal fun PlaylistDetailBody(state: LibraryDetailState, vm: LibraryDetailViewModel,
     library: LibraryViewModel, onBack: () -> Unit, navigate: (String) -> Unit,
@@ -265,7 +267,8 @@ internal data class LocalMusicPlaylistActions(val allowed: Boolean, val rescan: 
             nextPreviewRequests = preview.nextRequests,
             isSaved = { song -> when {
                 song.navidrome != null -> navidromeLikes[song.id] == true
-                likesUseNetease -> io.github.currencortex.music.data.song.NeteaseSongActionsRepository.songId(song) in neteaseLikes
+                song.usesNeteaseLikeState(likesUseNetease) ->
+                    io.github.currencortex.music.data.song.NeteaseSongActionsRepository.songId(song) in neteaseLikes
                 else -> statuses[song.id]?.liked == true
             } },
             onSave = if (localMusic != null) null else { song -> library.togglePrimaryLike(song, undoable = true) }, saveEnabled = !likeBusy,
@@ -282,7 +285,7 @@ internal data class LocalMusicPlaylistActions(val allowed: Boolean, val rescan: 
     val resume = if (canPlay && pausedWithProgress) remember(state.songs, currentSong) {
         currentSong?.takeIf { current -> state.songs.any { it.id == current.id && it.musicSource == current.musicSource } }
     } else null
-    val albumPage = vm.route.startsWith("lib/album/")
+    val albumPage = vm.kind == "album"
     val collectionKind = if (albumPage) "专辑" else "歌单"
     val title = state.title.ifBlank { if (state.loading) "正在加载$collectionKind" else collectionKind }
     val origin = when {
@@ -403,7 +406,7 @@ internal data class LocalMusicPlaylistActions(val allowed: Boolean, val rescan: 
                     }
                 }
                 state.error?.let { error -> item { Column(Modifier.fillMaxWidth().playlistPullSurface(pullMotion).padding(20.dp)) { Text(error); TextButton("重试", onClick = ::refresh) } } }
-                if (room != null && localMusic == null) item { Text("点击歌曲，为当前房间点歌", Modifier.playlistPullSurface(pullMotion).padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 13.sp) }
+                if (room != null && localMusic == null) item { Text("点击歌曲，加入当前一起听", Modifier.playlistPullSurface(pullMotion).padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 13.sp) }
                 if (!state.loading && songs.isEmpty() && state.error == null && localMusic?.allowed != false) item {
                     Text(if (query.isNotBlank()) "没有找到匹配的歌曲" else if (localMusic != null) "未找到音乐文件，下拉重新扫描" else "这里还没有歌曲，可在搜索结果中加入歌单",
                         Modifier.fillMaxWidth().playlistPullSurface(pullMotion).padding(24.dp), fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = .55f))
@@ -413,8 +416,14 @@ internal data class LocalMusicPlaylistActions(val allowed: Boolean, val rescan: 
                         .playlistPullSurface(pullMotion).background(surface).padding(horizontal = 16.dp)) {
                         CompositionLocalProvider(LocalGlassBackdrop provides trackBackdrop) {
                             PlaylistTrack(song, selected = currentSong?.id == song.id && currentSong?.musicSource == song.musicSource,
-                                liked = localMusic == null && (if (neteaseMain) song.id in neteaseLikes else statuses[song.id]?.liked == true), play = { play(songs, index) },
+                                liked = localMusic == null && (if (song.usesNeteaseLikeState(neteaseMain)) song.id in neteaseLikes
+                                    else statuses[song.id]?.liked == true), play = { play(songs, index) },
                                 next = { vm.container.playerController.add(song, true) }, enqueue = { vm.container.playerController.add(song) }) {
+                                localMusic?.editTags?.let { edit ->
+                                    val dismiss = LocalDismissSongMenu.current
+                                    MusicDestinationRow("编辑歌曲标签", { dismiss(); edit(song) },
+                                        modifier = Modifier.testTag("edit_local_tags_" + song.id), chevron = false)
+                                }
                                 LibrarySongActions(library, song, navigate)
                                 val dismiss = LocalDismissSongMenu.current
                                 if (editable) MusicDestinationRow("移出歌单", {
@@ -445,6 +454,10 @@ internal data class LocalMusicPlaylistActions(val allowed: Boolean, val rescan: 
         }, modifier = Modifier.testTag("playlist_depth_ribbon_toggle"), chevron = false)
         MusicDestinationRow("${collectionKind}信息", { menuOpen = false; infoOpen = true }, modifier = Modifier.testTag("playlist_menu_info"), chevron = false)
         MusicDestinationRow(if (localMusic != null) "重新扫描本地音乐" else "刷新歌单", { menuOpen = false; refresh() }, chevron = false)
+        localMusic?.findDuplicates?.let { find ->
+            MusicDestinationRow("查找重复歌曲", { menuOpen = false; find() },
+                modifier = Modifier.testTag("find_local_duplicates"), chevron = false)
+        }
         if (state.playlist?.editable(account.account?.id ?: 0) == true) {
             MusicDestinationRow(if (importState.running) "查看网易云导入进度" else "一键导入网易云我喜欢", {
                 menuOpen = false

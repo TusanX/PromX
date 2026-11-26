@@ -128,7 +128,7 @@ private fun PlayerState.miniTransport() =
     } else remember { mutableFloatStateOf(0f) }
     var dragged by remember { mutableFloatStateOf(0f) }
     val subtitle = when (state.mode) {
-        PlayerMode.ROOM -> if (pair != null) "双人一起听" else if (state.canControlPlayback) "房间控制" else "跟随房间"
+        PlayerMode.ROOM -> if (pair != null) "双人一起听" else if (state.canControlPlayback) "一起听控制" else "跟随一起听"
         else -> song?.artists.orEmpty()
     }
     val surface = LocalMusicGlassSurface.current
@@ -166,7 +166,7 @@ private fun PlayerState.miniTransport() =
                     if (enabled) customActions = listOf(CustomAccessibilityAction("上一首") { previous(); true }, CustomAccessibilityAction("下一首") { next(); true })
                 }, verticalArrangement = Arrangement.Center) {
                 val artistColor = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f)
-                MiniPlayerSongText(song?.name ?: "等待房间点歌", Modifier.fillMaxWidth().testTag("mini_title")
+                MiniPlayerSongText(song?.name ?: "等待一起听歌曲", Modifier.fillMaxWidth().testTag("mini_title")
                     .then(if (active) Modifier else Modifier.clearAndSetSemantics {}).graphicsLayer {
                     translationX = dragged.coerceIn(-threshold * 2, threshold * 2) * .15f
                 }, color = MiuixTheme.colorScheme.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)

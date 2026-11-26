@@ -59,9 +59,39 @@ enum class KaraokeScope(val label: String) {
     companion object { fun from(value: String?) = entries.firstOrNull { it.name == value } ?: ALL }
 }
 
-enum class LyricsStyle(val label: String) {
-    CLASSIC("经典"), APPLE_MUSIC("Apple Music");
+enum class LyricsStyle(val label: String, val description: String) {
+    CLASSIC("经典", "整首歌词连续滚动，保留流烟、星尘和 3D 效果"),
+    APPLE_MUSIC("Apple Music", "逐词聚焦，唱到的字自然点亮");
     companion object { fun from(value: String?) = entries.firstOrNull { it.name == value } ?: CLASSIC }
+}
+
+enum class FoliaLyricsScene(val mode: String, val label: String, val description: String) {
+    HANABI("hanabi", "花火", "烟花、光轨与歌词字幕"),
+    CLASSIC("classic", "流光", "流动光线与连续歌词"),
+    CADENZA("cadenza", "华彩", "唱词逐级展开的主标题式歌词"),
+    PARTITA("partita", "乐章", "分段、分栏与逐词推进的乐谱式歌词"),
+    MONET("monet", "莫奈", "油画肖像、漂浮装饰与连续歌词轨道"),
+    LUMIERE("lumiere", "光影", "电影光斑与空间化歌词"),
+    TEMPERA("tempera", "丹培拉", "绘画质感和逐词显影"),
+    NEBBIA("nebbia", "雾笺", "雾气、雨滴和墨迹歌词"),
+    FUME("fume", "烟岚", "流动烟雾与轻盈歌词"),
+    PENDOLO("pendolo", "摆钟", "钟摆节奏与时间感排版"),
+    CLADDAGH("claddagh", "克拉达", "逐字沿椭圆轨迹环绕的歌词"),
+    METAPHOR("metaphor", "隐喻", "墨色镜头、半调网点与硬切转场"),
+    MACHI("machi", "街景", "城市镜头与歌词字幕"),
+    DIORAMA("diorama", "立体景", "微缩立体空间中的歌词"),
+    TILT("tilt", "倾斜", "倾斜透视与运动歌词"),
+    CAPPELLA("cappella", "人声", "对话气泡与节奏字幕"),
+    SONNET("sonnet", "十四行", "电影运镜、诗行排版与逐行推进"),
+    STILL("still", "静帧", "静态构图中的歌词");
+    companion object {
+        fun from(value: String?) = entries.firstOrNull { it.mode == value || it.name == value } ?: MONET
+    }
+}
+
+enum class LyricsRenderQuality(val label: String) {
+    AUTO("自动"), FULL("高清"), BALANCED("均衡"), POWER_SAVER("省电");
+    companion object { fun from(value: String?) = entries.firstOrNull { it.name == value } ?: AUTO }
 }
 
 data class LyricsDisplayOptions(
@@ -75,7 +105,11 @@ data class LyricsDisplayOptions(
     val smoke: Boolean = false,
     val particles: Boolean = false,
     val style: LyricsStyle = LyricsStyle.CLASSIC,
+    val foliaScene: FoliaLyricsScene = FoliaLyricsScene.MONET,
     val appleMusic: AppleMusicLyricsOptions = AppleMusicLyricsOptions(),
+    val metaphorMotion: Boolean = true, val metaphorHalftone: Boolean = true,
+    val metaphorGrain: Boolean = true, val metaphorKeywordColors: Boolean = false,
+    val renderQuality: LyricsRenderQuality = LyricsRenderQuality.AUTO,
 ) {
     /** Classic stages own their layout; their saved options must not constrain Apple Music. */
     fun normalized(): LyricsDisplayOptions {
@@ -136,11 +170,17 @@ class MusicSettingsRepository(private val store: DataStore<Preferences>, scope: 
     private val smoke = booleanPreferencesKey("lyrics.smoke")
     private val particles = booleanPreferencesKey("lyrics.particles")
     private val lyricsStyle = stringPreferencesKey("lyrics.style")
+    private val foliaScene = stringPreferencesKey("lyrics.folia.scene")
+    private val lyricsRenderQuality = stringPreferencesKey("lyrics.renderQuality")
     private val appleLineSpacing = floatPreferencesKey("lyrics.appleMusic.lineSpacing")
     private val appleLineHeight = floatPreferencesKey("lyrics.appleMusic.lineHeight")
     private val appleAnimationSpeed = floatPreferencesKey("lyrics.appleMusic.animationSpeed")
     private val appleGlowIntensity = floatPreferencesKey("lyrics.appleMusic.glowIntensity")
     private val appleBlurStrength = floatPreferencesKey("lyrics.appleMusic.blurStrength")
+    private val metaphorMotion = booleanPreferencesKey("lyrics.metaphor.motion")
+    private val metaphorHalftone = booleanPreferencesKey("lyrics.metaphor.halftone")
+    private val metaphorGrain = booleanPreferencesKey("lyrics.metaphor.grain")
+    private val metaphorKeywordColors = booleanPreferencesKey("lyrics.metaphor.keywordColors")
     private val neteaseMain = booleanPreferencesKey("library.neteaseMain")
     private val likeMode = stringPreferencesKey("music.likeMode")
     private val primarySource = stringPreferencesKey("music.primarySource")
@@ -178,12 +218,21 @@ class MusicSettingsRepository(private val store: DataStore<Preferences>, scope: 
         p[restore] ?: true, p[nickname].orEmpty(), p[account] ?: 0,
         p[preload] ?: true, p[metered] ?: false, LyricsTypography.normalize(p[lyricsSize] ?: LyricsTypography.DEFAULT_SIZE),
         LyricsWeight.from(p[lyricsWeight]), p[lyricsOffset] ?: 0,
-        LyricsDisplayOptions(p[centered] ?: false, (p[fontWeight] ?: 500).coerceIn(400, 900),
-            p[blur] ?: true, p[stagger] ?: true, KaraokeScope.from(p[karaokeScope]), p[hideControls] ?: false,
-            p[translation] ?: true, p[romanization] ?: false, p[immersiveRomanization] ?: false,
-            p[wordAnimation] ?: true,
-            p[perspective] ?: true, p[glow] ?: true, p[wordLift] ?: true, p[smoke] ?: false, p[particles] ?: false,
-            LyricsStyle.from(p[lyricsStyle]), decodeAppleMusic(p)).normalized(), p[neteaseMain] ?: true,
+        LyricsDisplayOptions(centered = p[centered] ?: false, fontWeight = (p[fontWeight] ?: 500).coerceIn(400, 900),
+            blur = p[blur] ?: true, stagger = p[stagger] ?: true, karaokeScope = KaraokeScope.from(p[karaokeScope]),
+            hideControls = p[hideControls] ?: false, translation = p[translation] ?: true,
+            romanization = p[romanization] ?: false, immersiveRomanization = p[immersiveRomanization] ?: false,
+            wordAnimation = p[wordAnimation] ?: true, perspective = p[perspective] ?: true,
+            glow = p[glow] ?: true, wordLift = p[wordLift] ?: true, smoke = p[smoke] ?: false,
+            particles = p[particles] ?: false, style = LyricsStyle.from(p[lyricsStyle]),
+            foliaScene = FoliaLyricsScene.from(p[foliaScene]),
+            appleMusic = decodeAppleMusic(p),
+            metaphorMotion = p[metaphorMotion] ?: true,
+            metaphorHalftone = p[metaphorHalftone] ?: true,
+            metaphorGrain = p[metaphorGrain] ?: true,
+            metaphorKeywordColors = p[metaphorKeywordColors] ?: false,
+            renderQuality = LyricsRenderQuality.from(p[lyricsRenderQuality])).normalized(),
+        p[neteaseMain] ?: true,
         p[concurrentPlayback] ?: false, MusicTransitionMode.from(p[transition]), (p[crossfadeSeconds] ?: 5).coerceIn(1, 12), LikeMode.from(p[likeMode]), decodeLyricsSource(p),
         LyricsFont.from(p[lyricsFont]), p[lyricsFontFile].orEmpty(),
         CurrentMusicServer.from(p[serverMode], p[server]),
@@ -254,11 +303,17 @@ class MusicSettingsRepository(private val store: DataStore<Preferences>, scope: 
             p[smoke] = value.smoke
             p[particles] = value.particles
             p[lyricsStyle] = value.style.name
+            p[foliaScene] = value.foliaScene.mode
+            p[lyricsRenderQuality] = value.renderQuality.name
             p[appleLineSpacing] = value.appleMusic.lineSpacing
             p[appleLineHeight] = value.appleMusic.lineHeight
             p[appleAnimationSpeed] = value.appleMusic.animationSpeed
             p[appleGlowIntensity] = value.appleMusic.glowIntensity
             p[appleBlurStrength] = value.appleMusic.blurStrength
+            p[metaphorMotion] = value.metaphorMotion
+            p[metaphorHalftone] = value.metaphorHalftone
+            p[metaphorGrain] = value.metaphorGrain
+            p[metaphorKeywordColors] = value.metaphorKeywordColors
         }
     }
     suspend fun setAccount(id: Long, name: String) { store.edit { it[account] = id; it[nickname] = name } }

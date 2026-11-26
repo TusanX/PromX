@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// 备用音源接入层（B站 / QQ音乐）。
+// 备用音源接入层（哔哩哔哩 / QQ音乐）。
 // 端点均已实测可用（无需登录）：
-//   B站搜索  GET https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=video&keyword=..
-//   B站播放  GET https://api.bilibili.com/x/player/playurl?bvid=..&cid=..&fnval=16
+//   哔哩哔哩搜索  GET https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=video&keyword=..
+//   哔哩哔哩播放  GET https://api.bilibili.com/x/player/playurl?bvid=..&cid=..&fnval=16
 //   QQ 搜索  GET https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=..&format=json
 //   QQ 播放  POST https://u.y.qq.com/cgi-bin/musicu.fcg  (music.vkey.GetVkey, 账号态 + 设备参数)
 package io.github.currencortex.music.core.alt
@@ -14,18 +14,23 @@ import java.net.URL
 /** 一条来自备用音源的搜索结果 */
 data class AltTrack(
     val source: AltSource,
-    val id: String,          // B站 bvid / QQ songmid
+    val id: String,          // 哔哩哔哩 bvid / QQ songmid
     val title: String,
     val artist: String,
     val cover: String,
-    val extra: String = "",  // B站 cid / QQ albummid
+    val extra: String = "",  // 哔哩哔哩 cid / QQ albummid
     val mediaId: String = id, // QQ 的 media_mid；取流文件名必须使用它
     val mvVid: String? = null,
+    val durationMs: Long = 0,
+    val category: String = "",
+    val views: Long = 0,
+    val likes: Long = 0,
+    val authorMid: Long = 0,
 )
 
 enum class AltSource(val label: String) { BILIBILI("哔哩哔哩"), QQ("QQ音乐") }
 
-/** 取流地址的结果：B站与 QQ 都需要 Referer，播放时必须由播放器补头 */
+/** 取流地址的结果：哔哩哔哩与 QQ 都需要 Referer，播放时必须由播放器补头 */
 data class AltStream(val url: String, val referer: String)
 
 data class QqPlayable(val url: String, val format: String, val level: String,
@@ -45,7 +50,7 @@ object AltSources {
         val c = URL(url).openConnection() as HttpURLConnection
         c.setRequestProperty("User-Agent", UA)
         c.setRequestProperty("Referer", referer)
-        // B站需要 buvid3 cookie，否则搜索只返回 v_voucher（风控）
+        // 哔哩哔哩需要 buvid3 cookie，否则搜索只返回 v_voucher（风控）
         val guest = "buvid3=1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D12345infoc; b_nut=1700000000"
         c.setRequestProperty("Cookie", listOf(cookie, guest).filter(String::isNotBlank).joinToString("; "))
         c.connectTimeout = 12000; c.readTimeout = 15000
@@ -69,7 +74,7 @@ object AltSources {
     }
 
     /** 原始 JSON 返回（由上层用 kotlinx.serialization 解析，避免重复建模） */
-    /** B站搜索（音乐向）：多取一页，过滤后仍能有足够结果 */
+    /** 哔哩哔哩搜索（音乐向）：多取一页，过滤后仍能有足够结果 */
     fun searchBilibili(keyword: String, page: Int = 1, cookie: String = ""): Raw =
         get("https://api.bilibili.com/x/web-interface/search/type?search_type=video&page=${page.coerceAtLeast(1)}&keyword=" +
             java.net.URLEncoder.encode(keyword, "UTF-8"), "https://www.bilibili.com/", cookie)
@@ -103,7 +108,7 @@ object AltSources {
         (songs + singers).distinct().take(8)
     }.getOrDefault(emptyList())
 
-    /** B站音频流：返回 dash.audio 的第一条 */
+    /** 哔哩哔哩音频流：返回 dash.audio 的第一条 */
     fun bilibiliAudio(bvid: String, cid: String): Raw =
         get("https://api.bilibili.com/x/player/playurl?fnval=16&fourk=1&bvid=$bvid&cid=$cid",
             "https://www.bilibili.com/")
@@ -113,11 +118,16 @@ object AltSources {
         get("https://c.y.qq.com/v8/fcg-bin/fcg_v8_toplist_cp.fcg?topid=$topId&format=json&page=detail&type=top&song_begin=0&song_num=$limit",
             "https://y.qq.com/")
 
-    /** B站音乐区排行原始 JSON */
-    fun bilibiliRanking(): String =
-        get("https://api.bilibili.com/x/web-interface/ranking/v2?rid=3&type=all", "https://www.bilibili.com/").body
+    /** 哔哩哔哩排行原始 JSON；rid=0 为全站，其它值为分区。 */
+    fun bilibiliRanking(rid: Int = 3): String =
+        get("https://api.bilibili.com/x/web-interface/ranking/v2?rid=$rid&type=all", "https://www.bilibili.com/").body
 
-    /** B站：bvid → cid（播放必须） */
+    /** Public popular feed used as a diversity fallback for logged-out recommendation. */
+    fun bilibiliPopular(page: Int = 1, pageSize: Int = 30): String =
+        get("https://api.bilibili.com/x/web-interface/popular?pn=${page.coerceAtLeast(1)}&ps=${pageSize.coerceIn(1, 50)}",
+            "https://www.bilibili.com/").body
+
+    /** 哔哩哔哩：bvid → cid（播放必须） */
     fun bilibiliCid(bvid: String, cookie: String = ""): String? = runCatching {
         val raw = get("https://api.bilibili.com/x/web-interface/view?bvid=$bvid", "https://www.bilibili.com/", cookie)
         val root = kotlinx.serialization.json.Json.parseToJsonElement(raw.body).jsonObject
@@ -125,7 +135,7 @@ object AltSources {
     }.getOrNull()
 
     /**
-     * B站取流：先 dash 纯音频，没有音轨就回退 durl 的 mp4（ExoPlayer 能解出音轨）。
+     * 哔哩哔哩取流：先 dash 纯音频，没有音轨就回退 durl 的 mp4（ExoPlayer 能解出音轨）。
      * 两条都拿不到时才返回 null（付费/大会员/地区限制）。
      */
     fun bilibiliPlayable(bvid: String, cid: String, cookie: String = ""): String? =
@@ -423,7 +433,10 @@ object QqExtras {
 
     data class MvInfo(val id: Long, val vid: String, val title: String, val cover: String,
         val durationMs: Long)
-    data class MvStream(val url: String, val referer: String = "https://y.qq.com/")
+    data class MvStream(val urls: List<String>, val referer: String = "https://y.qq.com/") {
+        constructor(url: String, referer: String = "https://y.qq.com/") : this(listOf(url), referer)
+        val url: String get() = urls.first()
+    }
 
     /** 旧队列没有二维码 MV 信息时，用 songmid 回查一次。 */
     fun mv(songmid: String, cookies: Map<String, String>, uin: String): MvInfo? = runCatching {
@@ -479,14 +492,14 @@ object QqExtras {
         defn: String = "shd"): MvStream? = runCatching {
         if (vid.isBlank()) return null
         val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        // Folia 使用的账号态 MV 接口优先，腾讯视频旧接口只作兼容回退。
-        val accountUrl = runCatching {
+        // QQ 音乐 MV 接口优先，腾讯视频旧接口只作兼容回退。
+        val accountUrls = runCatching {
             val data = QqLibrary.musicuData(
-                "music.stream.MvUrlProxy",
+                "gosrf.Stream.MvUrlProxy",
                 "GetMvUrls",
                 buildJsonObject {
                     putJsonArray("vids") { add(vid) }
-                    put("request_type", 10003)
+                    put("request_typet", 10001)
                     put("guid", java.util.UUID.randomUUID().toString().replace("-", ""))
                 },
                 cookie,
@@ -495,16 +508,16 @@ object QqExtras {
             val files = data[vid]?.jsonObject?.get("mp4")?.jsonArray.orEmpty()
                 .filter { it.jsonObject["code"]?.jsonPrimitive?.intOrNull == 0 }
                 .sortedByDescending { it.jsonObject["filetype"]?.jsonPrimitive?.intOrNull ?: 0 }
-            files.firstNotNullOfOrNull { file ->
-                val value = file.jsonObject
-                listOf(value["url"], value["freeflow_url"])
-                    .flatMap { it?.jsonArray.orEmpty() }
-                    .firstNotNullOfOrNull { url ->
-                        url.jsonPrimitive.contentOrNull?.takeIf { it.startsWith("http") }
-                    }
+            fun urls(key: String): List<String> = files.flatMap { file ->
+                file.jsonObject[key]?.jsonArray.orEmpty().asReversed().mapNotNull { url ->
+                    url.jsonPrimitive.contentOrNull?.takeIf { it.startsWith("http") }
+                }
             }
-        }.getOrNull()
-        if (!accountUrl.isNullOrBlank()) return MvStream(accountUrl)
+            // 先把所有清晰度可直连的免费 CDN 排完，再尝试普通 url。普通 url
+            // 在缺少腾讯视频专用 Cookie 时通常返回 403，不能抢在高清 CDN 前面。
+            (urls("freeflow_url") + urls("comm_url") + urls("url")).distinct().take(10)
+        }.getOrNull().orEmpty()
+        if (accountUrls.isNotEmpty()) return MvStream(accountUrls)
         val url = "https://vv.video.qq.com/getinfo?vids=" +
             java.net.URLEncoder.encode(vid, "UTF-8") +
             "&platform=101001&otype=json&defn=${java.net.URLEncoder.encode(defn, "UTF-8")}" +
@@ -524,7 +537,7 @@ object QqExtras {
                 ?.takeIf(String::isNotBlank) } ?: return null
         val filename = video["fn"]?.jsonPrimitive?.contentOrNull ?: return null
         val vkey = video["fvkey"]?.jsonPrimitive?.contentOrNull ?: return null
-        MvStream(base.replaceFirst("https://", "http://") + filename + "?vkey=" +
+        MvStream(base + filename + "?vkey=" +
             java.net.URLEncoder.encode(vkey, "UTF-8"))
     }.getOrNull()
 
@@ -711,50 +724,158 @@ object AltFilter {
 }
 
 object AltRecommend {
-    /**
-     * B站 首页个性化推荐（wbi 签名 + 登录态）。
-     * 这是每天会变的那条流，比固定榜单更适合做「每日推荐」。
-     */
-    fun bilibiliRcmd(cookie: String, limit: Int = 30): List<AltTrack> = runCatching {
-        val body = BiliWbi.get("/x/web-interface/wbi/index/top/feed/rcmd", mapOf(
-            "ps" to limit.toString(), "fresh_type" to "4", "fresh_idx" to "1", "fresh_idx_1h" to "1",
-            "fetch_row" to "1", "brush" to "0", "homepage_ver" to "1", "plat" to "1",
-        ), cookie) ?: return emptyList()
-        val root = kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject
-        val items = root["data"]?.jsonObject?.get("item")?.jsonArray ?: return emptyList()
-        items.mapNotNull { el ->
-            val o = el.jsonObject
-            val bvid = o["bvid"]?.jsonPrimitive?.content ?: o["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            if (!bvid.startsWith("BV")) return@mapNotNull null
-            val pic = (o["pic"]?.jsonPrimitive?.content ?: "").let { if (it.startsWith("//")) "https:$it" else it }
-            val title = o["title"]?.jsonPrimitive?.content.orEmpty().replace(Regex("<[^>]+>"), "")
-            val duration = o["duration"]?.jsonPrimitive?.content
-            if (!AltFilter.looksLikeSong(duration, o["tname"]?.jsonPrimitive?.content, title)) return@mapNotNull null
-            AltTrack(AltSource.BILIBILI, bvid,
-                title,
-                o["owner"]?.jsonObject?.get("name")?.jsonPrimitive?.content ?: "",
-                pic,
-                extra = duration.orEmpty())
+    private val blockedTitle = listOf(
+        "广告", "带货", "直播间", "直播回放", "限时优惠", "秒杀", "领券", "下载安装",
+        "标题党", "搬运", "切片合集", "纯切片", "AI生成造假", "大会员专享",
+    )
+    private val categoryRotation = listOf(36 to "知识", 181 to "影视", 188 to "科技", 1 to "动画", 4 to "游戏", 160 to "生活")
+
+    private fun cleanText(text: String): String = text
+        .replace(Regex("<[^>]+>"), "")
+        .replace("&#34;", "\"").replace("&quot;", "\"")
+        .replace("&#39;", "'").replace("&amp;", "&")
+        .replace("&lt;", "<").replace("&gt;", ">")
+        .trim()
+
+    private fun durationMs(o: JsonObject): Long {
+        val raw = o["duration"]?.jsonPrimitive?.content.orEmpty()
+        val sec = if (raw.contains(':')) AltFilter.seconds(raw)
+        else raw.toLongOrNull()?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt() ?: -1
+        return sec.coerceAtLeast(0) * 1000L
+    }
+
+    private fun trackOf(o: JsonObject): AltTrack? {
+        val bvid = o["bvid"]?.jsonPrimitive?.contentOrNull
+            ?: o["id"]?.jsonPrimitive?.contentOrNull
+            ?: return null
+        if (!bvid.startsWith("BV")) return null
+        val title = cleanText(o["title"]?.jsonPrimitive?.content.orEmpty())
+        if (title.isBlank() || blockedTitle.any { title.contains(it, ignoreCase = true) }) return null
+        val millis = durationMs(o)
+        // Daily recommendations should be complete videos, not clips, trailers, endless streams,
+        // or three-hour compilations that crowd out every other topic.
+        if (millis !in 30_000L..7_200_000L) return null
+        val owner = o["owner"]?.jsonObject
+        val stat = o["stat"]?.jsonObject
+        val pic = o["pic"]?.jsonPrimitive?.content.orEmpty()
+            .let { if (it.startsWith("//")) "https:$it" else it }
+        return AltTrack(
+            source = AltSource.BILIBILI,
+            id = bvid,
+            title = title,
+            artist = owner?.get("name")?.jsonPrimitive?.content.orEmpty(),
+            cover = pic,
+            extra = millis.toString(),
+            durationMs = millis,
+            category = o["tname"]?.jsonPrimitive?.content.orEmpty(),
+            views = stat?.get("view")?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+            likes = stat?.get("like")?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+            authorMid = owner?.get("mid")?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+        )
+    }
+
+    private fun normalizeTitle(title: String): String = title.lowercase()
+        .replace(Regex("[^\\p{L}\\p{N}]+"), "")
+
+    private fun takeDiverse(source: List<AltTrack>, count: Int, seen: MutableSet<String>,
+        categoryCounts: MutableMap<String, Int> = mutableMapOf()): List<AltTrack> {
+        if (count <= 0) return emptyList()
+        val result = ArrayList<AltTrack>(count)
+        for (track in source) {
+            val identity = "bvid:${track.id}"
+            val title = "title:${normalizeTitle(track.title)}"
+            val author = track.authorMid.takeIf { it > 0 }?.let { "author:$it" }
+                ?: "author:${track.artist}"
+            if (identity in seen || title in seen || author in seen) continue
+            val category = track.category.ifBlank { "其它" }
+            if ((categoryCounts[category] ?: 0) >= 6) continue
+            seen += identity; seen += title; seen += author
+            categoryCounts[category] = (categoryCounts[category] ?: 0) + 1
+            result += track
+            if (result.size >= count) break
         }
+        return result
+    }
+
+    private fun personalFeed(cookie: String, limit: Int, seed: Int, batch: Int): List<AltTrack> {
+        if (cookie.isBlank()) return emptyList()
+        return buildList {
+            repeat(3) { row ->
+                val body = runCatching {
+                    BiliWbi.get("/x/web-interface/wbi/index/top/feed/rcmd", mapOf(
+                        "ps" to limit.coerceIn(12, 30).toString(),
+                        "fresh_type" to "4",
+                        "fresh_idx" to ((seed + batch * 3 + row) % 96 + 1).toString(),
+                        "fresh_idx_1h" to ((seed * 3 + batch + row) % 48 + 1).toString(),
+                        "fetch_row" to (row + 1).toString(),
+                        "brush" to "0",
+                        "homepage_ver" to "1",
+                        "plat" to "1",
+                    ), cookie)
+                }.getOrNull() ?: return@repeat
+                val items = runCatching {
+                    Json.parseToJsonElement(body).jsonObject["data"]?.jsonObject?.get("item")?.jsonArray
+                }.getOrNull().orEmpty()
+                items.mapNotNull { runCatching { trackOf(it.jsonObject) }.getOrNull() }.forEach(::add)
+            }
+        }
+    }
+
+    private fun popularFeed(limit: Int): List<AltTrack> = runCatching {
+        val body = AltSources.bilibiliPopular(1, limit.coerceIn(20, 50))
+        val items = Json.parseToJsonElement(body).jsonObject["data"]?.jsonObject?.get("list")?.jsonArray
+            .orEmpty()
+        items.mapNotNull { runCatching { trackOf(it.jsonObject) }.getOrNull() }
     }.getOrDefault(emptyList())
 
-    /** B站音乐区排行（rid=3 音乐区） */
+    /** One dated category rotation plus the full-site ranking keeps the feed broad and current. */
+    private fun categoryFeed(seed: Int, limit: Int): List<AltTrack> {
+        val picks = (0..1).map { categoryRotation[(seed + it) % categoryRotation.size] }
+        return picks.flatMap { (rid, _) ->
+            runCatching {
+                val body = AltSources.bilibiliRanking(rid)
+                val items = Json.parseToJsonElement(body).jsonObject["data"]?.jsonObject?.get("list")?.jsonArray
+                    .orEmpty()
+                items.mapNotNull { runCatching { trackOf(it.jsonObject) }.getOrNull() }.take(limit / 3)
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    /**
+     * Video recommendations, not a disguised music chart. Signed-in users get a dated mix of
+     * 60% personalized feed, 20% public popular and 20% rotating category selections. Logged-out
+     * users get the same breadth through popular and category feeds.
+     */
+    fun bilibiliRcmd(cookie: String, limit: Int = 30): List<AltTrack> {
+        val seed = (java.time.LocalDate.now().toEpochDay() and Int.MAX_VALUE.toLong()).toInt()
+        val batch = ((System.currentTimeMillis() / 3_600_000L) and 31L).toInt()
+        return bilibiliRcmd(cookie, limit, seed, batch)
+    }
+
+    fun bilibiliRcmd(cookie: String, limit: Int = 30, seed: Int, batch: Int = 0): List<AltTrack> = runCatching {
+        val personal = personalFeed(cookie, limit, seed, batch)
+        val popular = popularFeed(limit)
+        val category = categoryFeed(seed + batch, limit)
+        val seen = mutableSetOf<String>()
+        val categories = mutableMapOf<String, Int>()
+        val personalQuota = if (personal.isNotEmpty()) (limit * .60f).toInt() else 0
+        val categoryQuota = if (category.isNotEmpty()) (limit * .20f).toInt() else 0
+        val popularQuota = limit - personalQuota - categoryQuota
+        val result = buildList {
+            addAll(takeDiverse(personal, personalQuota, seen, categories))
+            addAll(takeDiverse(popular, popularQuota, seen, categories))
+            addAll(takeDiverse(category, categoryQuota, seen, categories))
+            if (size < limit) addAll(takeDiverse(personal + popular + category, limit - size, seen, categories))
+        }
+        result.take(limit)
+    }.getOrDefault(emptyList())
+
+    /** Full-site ranking fallback; kept public for existing callers. */
     fun bilibiliHot(limit: Int = 30): List<AltTrack> = runCatching {
-        val raw = AltSources.bilibiliRanking()
-        val list = kotlinx.serialization.json.Json.parseToJsonElement(raw)
-            .jsonObject["data"]?.jsonObject?.get("list")?.jsonArray ?: return emptyList()
-        list.asSequence().filter { el ->
-            val o = el.jsonObject
-            AltFilter.looksLikeSong(o["duration"]?.jsonPrimitive?.content, o["tname"]?.jsonPrimitive?.content,
-                o["title"]?.jsonPrimitive?.content)
-        }.take(limit).mapNotNull { el ->
-            val o = el.jsonObject
-            val bvid = o["bvid"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            AltTrack(AltSource.BILIBILI, bvid,
-                o["title"]?.jsonPrimitive?.content ?: "",
-                o["owner"]?.jsonObject?.get("name")?.jsonPrimitive?.content ?: "",
-                (o["pic"]?.jsonPrimitive?.content ?: "").let { if (it.startsWith("//")) "https:$it" else it })
-        }.toList()
+        val body = AltSources.bilibiliRanking(0)
+        val list = Json.parseToJsonElement(body).jsonObject["data"]?.jsonObject?.get("list")?.jsonArray
+            .orEmpty()
+        list.mapNotNull { runCatching { trackOf(it.jsonObject) }.getOrNull() }.take(limit)
     }.getOrDefault(emptyList())
 
     private fun qqChart(topId: Int, limit: Int): List<AltTrack> = runCatching {

@@ -31,7 +31,7 @@ val LocalRoomSongRequest = staticCompositionLocalOf<RoomSongRequest?> { null }
         Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()).testTag("song_actions_sheet")) {
             Text(menu.song.artists, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 13.sp,
                 color = MiuixTheme.colorScheme.onSurface.copy(alpha = .6f))
-            if (menu.transport) MusicDestinationRow(if (menu.roomRequest) "为房间点歌" else "立即播放", { onDismiss(); menu.play() }, chevron = false)
+            if (menu.transport) MusicDestinationRow(if (menu.roomRequest) "加入一起听" else "立即播放", { onDismiss(); menu.play() }, chevron = false)
             if (menu.transport && !menu.roomRequest) {
                 MusicDestinationRow("下一首播放", { onDismiss(); menu.next() }, chevron = false)
                 MusicDestinationRow("加入队列", { onDismiss(); menu.queue() }, chevron = false)
@@ -43,10 +43,10 @@ val LocalRoomSongRequest = staticCompositionLocalOf<RoomSongRequest?> { null }
                 }, modifier = Modifier.testTag("song_download"), summary = "保存歌曲信息、封面与歌词", chevron = false)
             if (!menu.song.video && menu.song.musicSource != io.github.currencortex.music.data.song.MusicSource.LOCAL) MusicDestinationRow("分享歌曲", { sharing = true },
                 modifier = Modifier.testTag("song_share"), summary = "生成海报、保存图片或复制链接", chevron = false)
-            // B站 专属入口：跳到视频页 / 复制 BV 号
+            // 哔哩哔哩 专属入口：跳到视频页 / 复制 BV 号
             menu.song.externalIds.bilibiliBvid?.takeIf { it.isNotBlank() }?.let { bvid ->
                 val context = androidx.compose.ui.platform.LocalContext.current
-                MusicDestinationRow("在 B站 打开", {
+                MusicDestinationRow("在 哔哩哔哩 打开", {
                     onDismiss()
                     runCatching {
                         context.startActivity(android.content.Intent(

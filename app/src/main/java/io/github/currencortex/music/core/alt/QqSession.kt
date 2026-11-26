@@ -65,6 +65,7 @@ class QqSessionStore(context: Context) {
             refreshToken = prefs.getString("refresh_token", "").orEmpty(),
             unionId = prefs.getString("unionid", "").orEmpty(),
             refreshKey = prefs.getString("refresh_key", "").orEmpty(),
+            encryptUin = cookies["encrypt_uin"].orEmpty(),
         )
     }
 

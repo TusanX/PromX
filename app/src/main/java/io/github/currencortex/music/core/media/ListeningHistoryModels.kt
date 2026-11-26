@@ -53,6 +53,8 @@ internal fun listeningHistorySong(song: Song): ListeningHistorySong {
         MusicSource.QQ_MUSIC -> listOf(song.externalIds.qqMusicId?.takeIf { it.isNotBlank() } ?: song.id.toString())
         MusicSource.APPLE_MUSIC -> listOf(song.externalIds.appleMusicId?.takeIf { it.isNotBlank() } ?: song.id.toString())
         MusicSource.SPOTIFY -> listOf(song.externalIds.spotifyId?.takeIf { it.isNotBlank() } ?: song.id.toString())
+        MusicSource.WEBDAV -> listOf(song.externalIds.webDavPath?.takeIf { it.isNotBlank() } ?: song.id.toString())
+        MusicSource.MUSIC_ASSISTANT -> listOf(song.externalIds.musicAssistantUri?.takeIf { it.isNotBlank() } ?: song.id.toString())
     }
     // Length-prefix fields so different provider/account/track combinations cannot alias.
     val raw = (listOf(song.musicSource.name) + identity).joinToString("") { "${it.length}:$it" }

@@ -160,7 +160,10 @@ class NavidromeRepository(private val vault: TokenStore, scope: CoroutineScope) 
         if (download && !state.value.download) throw ApiException(ErrorKind.Forbidden)
         // Preserve original audio; Navidrome/server transcoding policy controls codec compatibility.
         val url = client.media(if (download) "download" else "stream", listOf("id" to ref.id, "format" to "raw"))
-        return AudioSource(url, "Navidrome 原音质", ref.sampleRate, ref.channels, ref.format, validForSeconds = 600)
+        return AudioSource(
+            url, "Navidrome 原音质", ref.sampleRate, ref.channels, ref.format,
+            validForSeconds = 600, source = "navidrome",
+        )
     }
     suspend fun scrobble(song: Song, submission: Boolean) {
         val ref = track(song)

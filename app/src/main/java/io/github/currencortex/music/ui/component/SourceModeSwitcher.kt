@@ -131,7 +131,7 @@ private val modes = listOf(
     when (selected) {
         MusicSource.BILIBILI -> {
             ok = biliLoggedIn
-            text = if (ok) "已连接 B站，歌单与「我喜欢」同步自收藏夹" else "未登录 B站，仅能播放与看评论"
+            text = if (ok) "已连接 哔哩哔哩，歌单与「我喜欢」同步自收藏夹" else "未登录 哔哩哔哩，仅能播放与看评论"
         }
         MusicSource.QQ_MUSIC -> {
             ok = qqLoggedIn

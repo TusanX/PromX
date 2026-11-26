@@ -70,7 +70,6 @@ internal data class NeteaseListenTogetherActions(
     val state by controller.state.collectAsStateWithLifecycle()
     val account by container.neteaseSessions.state.collectAsStateWithLifecycle()
     val playback by container.playerController.state.collectAsStateWithLifecycle()
-    val cmRoom by container.roomSession.state.collectAsStateWithLifecycle()
     val clipboard = LocalClipboard.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -209,7 +208,7 @@ internal data class NeteaseListenTogetherActions(
                             if (clip.itemCount > 0) clip.getItemAt(0).coerceToText(context)?.toString() else null
                         } }),
                     onBack = onBack, onSearch = onSearch, onPlayer = onPlayer, onBinding = onBinding,
-                    currentMusicRoomActive = cmRoom.detail != null, onDialogActive = { mainDialogActive = it },
+                    onDialogActive = { mainDialogActive = it },
                     onHistory = { archiveController.history() })
             }
         }
@@ -219,11 +218,11 @@ internal data class NeteaseListenTogetherActions(
 @Composable internal fun NeteaseListenTogetherContent(state: NeteaseListenTogetherState,
     account: NeteaseAccountState, playback: PlayerState, actions: NeteaseListenTogetherActions,
     onBack: () -> Unit, onSearch: () -> Unit, onPlayer: () -> Unit,
-    onBinding: (() -> Unit)? = null, currentMusicRoomActive: Boolean = false,
+    onBinding: (() -> Unit)? = null,
     onDialogActive: (Boolean) -> Unit = {}, onHistory: (() -> Unit)? = null) {
     val colors = MiuixTheme.colorScheme
     val ready = account.loggedIn && !account.stale && (account.profile?.uid ?: 0) > 0
-    val canStart = ready && !state.busy && !currentMusicRoomActive
+    val canStart = ready && !state.busy
     val showAccountCard = !ready
     val accountSummary = when { account.stale -> "本机网易云登录已过期"; ready -> "已登录 · ${account.profile?.nickname?.ifBlank { "网易云用户" }}"; else -> "尚未登录本机网易云账号" }
     var invite by rememberSaveable(account.revision) { mutableStateOf("") }
@@ -243,7 +242,7 @@ internal data class NeteaseListenTogetherActions(
     }
     fun phase(value: NeteaseListenTogetherState) = when {
         value.active -> "active:${value.room?.roomId}"
-        ready && !currentMusicRoomActive && value.busy && value.availableRoom == null &&
+        ready && value.busy && value.availableRoom == null &&
             value.operation in setOf(ListenTogetherOperation.REFRESH, ListenTogetherOperation.RESTORE) -> "checking"
         else -> "idle"
     }
@@ -276,11 +275,6 @@ internal data class NeteaseListenTogetherActions(
                     if (onBinding != null) MusicTextAction(if (account.stale) "重新登录网易云" else "登录网易云", onBinding,
                         Modifier.testTag("netease_listen_login"))
                 }
-            } } }
-            if (currentMusicRoomActive) item { SettingsGroup(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("正在使用 Prom 房间", fontWeight = FontWeight.SemiBold)
-                Text("请先退出当前房间，再开启网易云双人一起听。", fontSize = 13.sp, color = colors.onSurfaceVariantSummary)
-                MusicTextAction("返回房间", onBack)
             } } }
             state.error?.let { error -> item { SettingsGroup(Modifier.fillMaxWidth().testTag("netease_listen_error")) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -396,7 +390,7 @@ internal data class NeteaseListenTogetherActions(
                         }, Modifier.testTag("netease_listen_join"), enabled = canStart && invite.isNotBlank())
                     }
                     if (state.operation == ListenTogetherOperation.JOIN) ListenLoadingLabel("正在连接好友的会话…", Modifier.testTag("netease_listen_join_loading"))
-                    Text("请使用网易云音乐的邀请链接；Prom 六位房间号请返回房间页加入。", fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
+                    Text("请粘贴网易云音乐生成的一起听邀请链接。", fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
                 } } }
                 if (ready && onHistory != null) item {
                     SettingsGroup { MusicDestinationRow("一起听记录", onHistory, summary = "历史、排行与缘分报告") }

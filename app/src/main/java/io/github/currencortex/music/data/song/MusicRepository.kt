@@ -16,7 +16,9 @@ class MusicRepository(private val api: ApiClient,
     private val navidrome: io.github.currencortex.music.data.navidrome.NavidromeRepository? = null,
     private val lx: io.github.currencortex.music.data.lx.LxSourceStore? = null,
     private val emby: io.github.currencortex.music.data.emby.EmbyRepository? = null,
-    /** B站 会话 Cookie：新版视频的播放地址要按会话签名，不带就会 403 */
+    private val webDav: io.github.currencortex.music.data.connected.WebDavRepository? = null,
+    private val musicAssistant: io.github.currencortex.music.data.connected.MusicAssistantRepository? = null,
+    /** 哔哩哔哩 会话 Cookie：新版视频的播放地址要按会话签名，不带就会 403 */
     private val biliCookie: (() -> String)? = null,
     /** QQ 音乐会话：会员曲的 vkey 必须带登录态，否则只能拿到免费试听 */
     private val qqCookie: (() -> io.github.currencortex.music.core.alt.QqSessionStore?)? = null) {
@@ -33,6 +35,7 @@ class MusicRepository(private val api: ApiClient,
     }
     suspend fun detail(song: Song): Song = when (song.musicSource) {
         MusicSource.EMBY -> requireNotNull(emby).detail(song)
+        MusicSource.WEBDAV, MusicSource.MUSIC_ASSISTANT -> song
         MusicSource.LOCAL -> song
         MusicSource.NAVIDROME -> requireNotNull(navidrome).detail(song)
         else -> detail(song.id)
@@ -43,6 +46,11 @@ class MusicRepository(private val api: ApiClient,
     suspend fun source(song: Song, quality: AudioQuality, session: RequestSession? = null, refresh: Boolean = false): AudioSource {
         if (song.musicSource == MusicSource.NAVIDROME) return requireNotNull(navidrome).source(song, quality)
         if (song.musicSource == MusicSource.EMBY) return requireNotNull(emby).source(song)
+        if (song.musicSource == MusicSource.WEBDAV) return requireNotNull(webDav).source(song, quality)
+        if (song.musicSource == MusicSource.MUSIC_ASSISTANT) {
+            throw ApiException(ErrorKind.NeteaseAudioUnavailable,
+                userMessage = "Music Assistant 曲目需在已连接的音箱或播放器中播放")
+        }
         // 备用音源：解析出带 Referer 的本地代理地址后直接播放
         if (song.musicSource == MusicSource.BILIBILI) {
             // 本地缓存文件：不走网络，直接播
@@ -52,21 +60,33 @@ class MusicRepository(private val api: ApiClient,
                     source = "bilibili-cache", validForSeconds = 3600)
             }
             val bvid = song.externalIds.bilibiliBvid ?: song.localUri
-            // 搜索结果里没带 cid 时，播放前现取一次（B站 playurl 必须要 cid）
+            // 搜索结果里没带 cid 时，播放前现取一次（哔哩哔哩 playurl 必须要 cid）
             val cid = song.externalIds.bilibiliCid?.takeIf { it.isNotBlank() }
                 ?: io.github.currencortex.music.core.alt.AltSources.bilibiliCid(bvid).orEmpty()
             val cookie = biliCookie?.invoke().orEmpty()
             // 优先整段 mp4：它同时带画面和声音，视频模式可以直接把同一路流挂到画面上，
             // 不需要第二个播放器，也就结构上不可能出现叠音。
-            io.github.currencortex.music.core.alt.BiliPlayback.plan(
-                bvid, cid, io.github.currencortex.music.core.alt.BiliQuality.preferredQn, cookie)?.mp4?.let { mp4 ->
+            val plan = io.github.currencortex.music.core.alt.BiliPlayback.plan(
+                bvid, cid, io.github.currencortex.music.core.alt.BiliQuality.preferredQn, cookie)
+            if (io.github.currencortex.music.core.alt.BiliQuality.wantsVideo && plan?.video != null) {
+                return AudioSource(
+                    url = io.github.currencortex.music.core.alt.BiliPlayback.manifestDataUri(plan),
+                    level = plan.quality,
+                    sampleRate = 44100,
+                    channelCount = 2,
+                    format = "dash",
+                    source = "bilibili-video",
+                    validForSeconds = 600,
+                )
+            }
+            plan?.mp4?.let { mp4 ->
                 return AudioSource(mp4, "standard", 44100, 2, format = "mp4", source = "bilibili", validForSeconds = 600)
             }
             val resolved = io.github.currencortex.music.core.alt.BiliPlayback.resolve(bvid, cid, cookie)
             val url = resolved.url
                 ?: throw ApiException(ErrorKind.NeteaseAudioUnavailable, userMessage =
-                    if (resolved.needsLogin) "这条视频的音频地址需要登录 B站 才能获取，请到「我的 → 哔哩哔哩」扫码登录"
-                    else "B站这条拿不到音频（可能已下架或需要大会员）")
+                    if (resolved.needsLogin) "这条视频的音频地址需要登录 哔哩哔哩 才能获取，请到「我的 → 哔哩哔哩」扫码登录"
+                    else "哔哩哔哩这条拿不到音频（可能已下架或需要大会员）")
             return AudioSource(url, "standard", 44100, 2, format = "aac", source = "bilibili", validForSeconds = 600)
         }
         if (song.musicSource == MusicSource.QQ_MUSIC) {

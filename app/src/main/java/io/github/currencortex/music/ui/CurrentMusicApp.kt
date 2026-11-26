@@ -124,6 +124,7 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import io.github.currencortex.music.feature.library.*
 import io.github.currencortex.music.data.song.Song
 import java.net.URLDecoder
+import java.net.URLEncoder
 import io.github.currencortex.music.feature.profile.*
 import io.github.currencortex.music.feature.binding.*
 import io.github.currencortex.music.feature.room.*
@@ -133,6 +134,8 @@ private const val BOT_SLEEP_MS = 120_000L
 
 private fun isPlaylistRoute(route: String) = route == "lib/local" || route.startsWith("lib/playlist/") || route.startsWith("lib/ncmplaylist/") || route.startsWith("lib/album/") ||
     route in setOf("lib/likes", "lib/daily", "lib/foryou", "lib/recent")
+
+private fun isBiliPlayerRoute(route: String) = route.startsWith("bili/player/")
 
 private val UnifiedMiniScrollClearance = 36.dp
 private const val ROOT = 0
@@ -247,7 +250,6 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
     }
     val searchKeyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val searchFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
-    val roomLive by container.roomSession.state.collectAsStateWithLifecycle()
     val nativeTogether by container.listenTogether.state.collectAsStateWithLifecycle()
     val tabsState = rememberSaveableStateHolder()
     var backStack by rememberSaveable(stateSaver = NavigationStackSaver) { mutableStateOf(listOf(ROOT.toString())) }
@@ -291,7 +293,6 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         }
         var songMenu by remember { mutableStateOf<SongMenu?>(null) }
         var downloadSongJson by rememberSaveable { mutableStateOf<String?>(null) }
-        var roomPending by remember { mutableStateOf(setOf<Long>()) }
         var miniHeight by remember { mutableStateOf(72.dp) }
         var miniBounds by remember { mutableStateOf<Rect?>(null) }
         var miniCoordinates by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
@@ -305,7 +306,8 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         var miniArtworkOrigin by remember { mutableStateOf<(() -> PlayerArtworkOrigin?)?>(null) }
         val playerOpen = backStack.last() == PLAYER.toString()
         val playerPresented by remember(playerOpen) { derivedStateOf { playerOpen || playerExpansion.value > .0001f } }
-        val hideDesktopIsland = updateDialogVisible || playerPresented || backStack.last() == "lib/video"
+        val hideDesktopIsland = updateDialogVisible || playerPresented || backStack.last() == "lib/video" ||
+            isBiliPlayerRoute(backStack.last())
         SideEffect { container.desktopIslandPageHidden.value = hideDesktopIsland }
         androidx.compose.runtime.DisposableEffect(container) { onDispose { container.desktopIslandPageHidden.value = false } }
         val searchOpen = SEARCH.toString() in backStack
@@ -325,12 +327,14 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         val rootPage = sceneStack.last() == ROOT.toString() && !searchPresented
         val imeInsets = WindowInsets.ime
         val keyboardOpen by remember(imeInsets, density) { derivedStateOf { imeInsets.getBottom(density) > 0 } }
+        val biliMode = lyricsFontSettings.primarySource == io.github.currencortex.music.data.song.MusicSource.BILIBILI
         val miniRetainedAvailable = currentSong != null || playerState.mode == PlayerMode.ROOM
-        val miniAvailable = !keyboardOpen && miniRetainedAvailable
+        val miniAvailable = !biliMode && !keyboardOpen && miniRetainedAvailable
         val showMini = miniAvailable && !playerPresented && sceneStack.last() !in setOf("lib/video", "appearance-font") &&
+            !isBiliPlayerRoute(sceneStack.last()) &&
             !(settings.playlistRecordShelf && isPlaylistRoute(sceneStack.last()))
         PreloadMusicCovers(listOf(currentSong?.cover.orEmpty()), 800)
-        LaunchedEffect(sessionRevision) { songMenu = null; roomPending = emptySet() }
+        LaunchedEffect(sessionRevision) { songMenu = null }
         var roomDialogOpen by remember { mutableStateOf(false) }
         var playerDialogOpen by remember { mutableStateOf(false) }
         var playerEffectsOpen by rememberSaveable { mutableStateOf(false) }
@@ -339,7 +343,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         val pageSceneStrategy=remember(pageNavigation) {PageContainerSceneStrategy(pageNavigation,
             setOf(ROOT.toString(),SETTINGS.toString(),APPEARANCE.toString(),NETWORK.toString(),STORAGE.toString(),ABOUT.toString(),
                 "user/security","user/binding","user/netease-tasks","user/playlist-import","user/decorations",
-                EQUALIZER.toString(),"appearance-font","playback-settings","audio-output","desktop-lyrics","sound-equalizer","navidrome","emby",SupportConfig.route)+
+                EQUALIZER.toString(),"appearance-font","playback-settings","audio-output","desktop-lyrics","sound-equalizer","navidrome","emby","free-radio","webdav","music-assistant",SupportConfig.route)+
                 LegalDocument.entries.map {it.route().toString()})}
         SideEffect {pageNavigation.onClosed={route->
             if(backStack.lastOrNull()==route)backStack=backStack.dropLast(1)
@@ -373,6 +377,8 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
             backStack = backStack + route.toString()
         }
         var roamingRequest by rememberSaveable { mutableIntStateOf(0) }
+        var biliVideoRequest by rememberSaveable { mutableIntStateOf(0) }
+        var biliSessionRevision by remember { mutableIntStateOf(0) }
         fun navigateLibrary(route: String) {
             if (backStack.last() == SEARCH.toString()) {
                 searchFocus = false
@@ -420,31 +426,28 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                 pendingPlay = action
             else action()
         }
-        fun requestSong(song: Song) {
-            if (song.musicSource in setOf(io.github.currencortex.music.data.song.MusicSource.NAVIDROME, io.github.currencortex.music.data.song.MusicSource.EMBY, io.github.currencortex.music.data.song.MusicSource.LOCAL)) { libraryVm.message.value = "本地或私有曲库歌曲不能提交到一起听房间"; return }
-            if (nativeTogether.active) { container.listenTogether.request(song); return }
-            if (!container.roomSession.active || song.id in roomPending) return
-            val revision = container.accountRepository.sessionRevision.value
-            val roomId = roomLive.detail?.room?.id
-            roomPending = roomPending + song.id
-            scope.launch {
-                try {
-                    val result = container.roomSession.submit(song)
-                    if (revision == container.accountRepository.sessionRevision.value && roomId == container.roomSession.state.value.detail?.room?.id) {
-                        libraryVm.message.value = when (result) {
-                            is AppResult.Success -> "已提交点歌：${song.name}，可返回房间查看队列"
-                            is AppResult.Failure -> "点歌失败：${result.kind.message}"
-                        }
-                    }
-                } finally { if (revision == container.accountRepository.sessionRevision.value) roomPending = roomPending - song.id }
-            }
+        fun openBiliVideo(video: io.github.currencortex.music.feature.bili.BiliHubRepository.Video) {
+            if (video.bvid.isBlank()) return
+            navigateLibrary("bili/player/" + URLEncoder.encode(video.bvid, "UTF-8"))
         }
-        LaunchedEffect(roomLive.detail?.room?.id, playerState.mode, nativeTogether.active) {
-            if (backStack.last() == "room/search" && !container.roomSession.active && !nativeTogether.active) navigateBack()
+        fun openBiliCreator(mid: Long) {
+            if (mid > 0) navigateLibrary("bili/creator/$mid")
+        }
+        fun openBiliLive(room: io.github.currencortex.music.feature.bili.BiliHubRepository.LiveRoom) {
+            if (room.roomId > 0) navigateLibrary("bili/live/${room.roomId}")
+        }
+        fun openBiliWeb(url: String) {
+            if (url.isNotBlank()) navigateLibrary("bili/web/" + URLEncoder.encode(url, "UTF-8"))
+        }
+        fun requestSong(song: Song) {
+            if (song.musicSource in setOf(io.github.currencortex.music.data.song.MusicSource.NAVIDROME, io.github.currencortex.music.data.song.MusicSource.EMBY, io.github.currencortex.music.data.song.MusicSource.LOCAL)) { libraryVm.message.value = "本地或私有曲库歌曲不能提交到网易云一起听"; return }
+            if (nativeTogether.active) { container.listenTogether.request(song); return }
+        }
+        LaunchedEffect(playerState.mode, nativeTogether.active) {
+            if (backStack.last() == "room/search" && !nativeTogether.active) navigateBack()
         }
         val roomRequest = when {
             nativeTogether.active -> RoomSongRequest(::requestSong) { nativeTogether.busy }
-            container.roomSession.active && roomLive.detail != null -> RoomSongRequest(::requestSong) { it in roomPending }
             else -> null
         }
         val playerDrag = remember(playerExpansion, scope) { PlayerSheetDragController(playerExpansion, scope) }
@@ -456,11 +459,16 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
             playerDrag.flingThreshold = with(density) { 600.dp.toPx() }
         }
         val predictiveBack = settings.predictiveBack && Build.VERSION.SDK_INT >= 34
-        val labels = listOf("首页", "发现", "我的", "设置")
-        val icons = listOf(io.github.currencortex.music.ui.component.PromIcons.House,
+        val labels = if (biliMode) listOf("首页", "动态", "我的", "设置")
+            else listOf("首页", "发现", "我的", "设置")
+        val icons = if (biliMode) listOf(io.github.currencortex.music.ui.component.PromIcons.House,
             io.github.currencortex.music.ui.component.PromIcons.Compass,
             io.github.currencortex.music.ui.component.PromIcons.Person,
             io.github.currencortex.music.ui.component.PromIcons.Gear)
+            else listOf(io.github.currencortex.music.ui.component.PromIcons.House,
+                io.github.currencortex.music.ui.component.PromIcons.Compass,
+                io.github.currencortex.music.ui.component.PromIcons.Person,
+                io.github.currencortex.music.ui.component.PromIcons.Gear)
         fun selectTab(index: Int) {
             if (selected == index) return
             when {
@@ -501,7 +509,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         val dockCollapsed = miniRetainedAvailable && !wideLayout && dockScroll.collapsed
         // Reserve page space once. Animate only the overlay's GPU translation, never the page height.
         val miniRoot = backStack.lastOrNull { it != PLAYER.toString() } == ROOT.toString()
-        val navigationSpace = if ((miniRoot && !wideLayout || hasEmbyDock) && !keyboardOpen && !dockCollapsed) 92.dp else 0.dp
+        val navigationSpace = if (((miniRoot && !biliMode) && !wideLayout || hasEmbyDock) && !keyboardOpen && !dockCollapsed) 92.dp else 0.dp
         val miniLift = animateDpAsState(navigationSpace, tween(if (settings.floatingBar) 180 else 320), label = "mini player lift")
         // A scene's insets must not depend on which route is currently on top. Predictive back
         // renders both scenes before committing; changing the shared viewport makes them jump.
@@ -515,14 +523,16 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         // Update layout values without replacing the decorator that retains each page.
         val sceneInsets = remember {
             NavEntryDecorator<String> { entry ->
-                val playlistScene = isPlaylistRoute(entry.contentKey.toString())
+                val routeKey = entry.contentKey.toString()
+                val playlistScene = isPlaylistRoute(routeKey)
+                val biliPlayerScene = isBiliPlayerRoute(routeKey)
                 val ribbonScene = ribbonEnabled.value && playlistScene
-                val miniSpace = if (availableMini.value && entry.contentKey !in setOf(ROOT.toString(), PLAYER.toString(), "lib/video", "appearance-font")) miniInset.value else 0.dp
+                val miniSpace = if (!biliPlayerScene && availableMini.value && entry.contentKey !in setOf(ROOT.toString(), PLAYER.toString(), "lib/video", "appearance-font")) miniInset.value else 0.dp
                 // Each moving scene must cover the outgoing page and its dim scrim, including
                 // its inset areas. A background on NavDisplay alone sits behind both scenes.
                 Box(Modifier.fillMaxSize().background(if (ribbonScene) androidx.compose.ui.graphics.Color(0xFF0A0A0A) else MiuixTheme.colorScheme.background)
                     .testTag("music_scene_${entry.contentKey}")
-                    .then(if (playlistScene || entry.contentKey in setOf(PLAYER.toString(), "lib/video", EQUALIZER.toString())) Modifier else Modifier.navigationBarsPadding())) {
+                    .then(if (playlistScene || biliPlayerScene || entry.contentKey in setOf(PLAYER.toString(), "lib/video", EQUALIZER.toString())) Modifier else Modifier.navigationBarsPadding())) {
                     // Keep the scene viewport full size so the glass samples page content.
                     // Clearance belongs to the end of each scrollable list, not to its bounds.
                     CompositionLocalProvider(LocalMusicBottomInset provides miniSpace,
@@ -563,7 +573,25 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                             Box(Modifier.fillMaxSize().then(if (tab == HOME_TAB && navidromeAccount.configured && navidromeAccount.home)
                                 Modifier.statusBarsPadding() else Modifier)) {
                             when (tab) {
-                                HOME_TAB -> if (navidromeAccount.configured && navidromeAccount.home)
+                                HOME_TAB -> if (biliMode)
+                                    io.github.currencortex.music.feature.bili.BiliSailHomeScreen(
+                                        container = container,
+                                        sessionRevision = biliSessionRevision,
+                                        searchQuery = searchQuery,
+                                        onSearch = { navigateTo(SEARCH) },
+                                        onSearchSubmit = {
+                                            navigateTo(SEARCH)
+                                            val query = searchVm.state.value.query
+                                            if (query.isNotBlank()) { searchVm.search(query); searchFocus = false }
+                                        },
+                                        onPlayVideo = ::openBiliVideo,
+                                        onCreator = ::openBiliCreator,
+                                        onLive = ::openBiliLive,
+                                        onWeb = ::openBiliWeb,
+                                        onLogin = { navigateLibrary("bili/login") },
+                                        navigate = ::navigateLibrary,
+                                    )
+                                else if (navidromeAccount.configured && navidromeAccount.home)
                                     io.github.currencortex.music.feature.navidrome.NavidromeScreen(navidromeVm, libraryVm, ::navigateLibrary,
                                         { songs, index -> playWithPermission { container.playerController.playList(songs, index) } }, root = true)
                                 else MusicHomeScreen(libraryVm, onSearch = { navigateTo(SEARCH) }, onProfile = { _, _ -> selectTab(ME_TAB) },
@@ -574,8 +602,26 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                                         val query = searchVm.state.value.query
                                         if (query.isNotBlank()) { searchVm.search(query); searchFocus = false }
                                     })
-                                DISCOVER_TAB -> DiscoverScreen(discoverVm, discoverPager, ::navigateLibrary)
-                                ME_TAB -> MeScreen(profileVm, authVm, ::navigateLibrary, { selectTab(SETTINGS_TAB) },
+                                DISCOVER_TAB -> if (biliMode)
+                                    io.github.currencortex.music.feature.bili.BiliSailDynamicScreen(
+                                        container = container,
+                                        sessionRevision = biliSessionRevision,
+                                        onPlayVideo = ::openBiliVideo,
+                                        onCreator = ::openBiliCreator,
+                                        onLive = ::openBiliLive,
+                                        onWeb = ::openBiliWeb,
+                                        navigate = ::navigateLibrary,
+                                    )
+                                else DiscoverScreen(discoverVm, discoverPager, ::navigateLibrary)
+                                ME_TAB -> if (biliMode)
+                                    io.github.currencortex.music.feature.bili.BiliMineScreen(
+                                        container = container,
+                                        sessionRevision = biliSessionRevision,
+                                        onPlayVideo = ::openBiliVideo,
+                                        onCreator = ::openBiliCreator,
+                                        navigate = ::navigateLibrary,
+                                    )
+                                else MeScreen(profileVm, authVm, ::navigateLibrary, { selectTab(SETTINGS_TAB) },
                                     play = { songs, index -> playWithPermission { container.playerController.playList(songs, index) } })
                                 SETTINGS_TAB -> SettingsScreen(
                                     onAppearance = { navigateTo(APPEARANCE) }, onNetwork = { navigateTo(NETWORK) },
@@ -584,7 +630,11 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                                     onAudioOutput = { navigateLibrary("audio-output") },
                                     onPlayback = { navigateLibrary("playback-settings") }, onEffects = { navigateTo(EQUALIZER) },
                                     updateTransfer = updateTransferState, onNavigateFrom = pageNavigation::from,
-                                    onSupport = { navigateLibrary(SupportConfig.route) })
+                                    onSupport = { navigateLibrary(SupportConfig.route) },
+                                    bilibiliMode = biliMode,
+                                    onBiliLogin = { navigateLibrary("bili/login") },
+                                    onBiliMessages = { navigateLibrary("bili/messages") },
+                                    onBiliDownloads = { navigateLibrary("lib/local") })
                             }
                             }
                         }
@@ -595,14 +645,25 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                         backEnabled = backStack.last() == SEARCH.toString() && !playerPresented && songMenu == null && !miniQueueOpen && libraryDialogSong == null && likeSelection.song == null,
                         onBack = ::navigateBack) {
                         CompositionLocalProvider(LocalMusicBottomInset provides if (miniAvailable) miniHeight else 0.dp) {
-                            SearchScreen(searchVm, container.playerController,
-                                quickActions = { song, showLike -> io.github.currencortex.music.feature.search.SearchResultLibraryActions(libraryVm, song, showLike) },
-                                onResults = libraryVm::refreshSearchLikes,
-                                onPlayAll = { songs -> playWithPermission { container.playerController.playList(songs, 0) } },
-                                actions = { LibrarySongActions(libraryVm, it, ::navigateLibrary) }, navigate = ::navigateLibrary,
-                                onBack = ::navigateBack, sheet = searchSheet, autoFocus = searchFocus, onFocused = { searchFocus = false },
-                                recommendations = libraryHome.daily + libraryHome.forYou, recent = libraryHome.recent) { song ->
-                                playWithPermission { container.playerController.playSong(song) }
+                            if (biliMode) {
+                                io.github.currencortex.music.feature.bili.sail.BiliSailSearchScreen(
+                                    container = container,
+                                    initialQuery = searchQuery,
+                                    onBack = ::navigateBack,
+                                    onPlayVideo = ::openBiliVideo,
+                                    onCreator = ::openBiliCreator,
+                                    onWeb = ::openBiliWeb,
+                                )
+                            } else {
+                                SearchScreen(searchVm, container.playerController,
+                                    quickActions = { song, showLike -> io.github.currencortex.music.feature.search.SearchResultLibraryActions(libraryVm, song, showLike) },
+                                    onResults = libraryVm::refreshSearchLikes,
+                                    onPlayAll = { songs -> playWithPermission { container.playerController.playList(songs, 0) } },
+                                    actions = { LibrarySongActions(libraryVm, it, ::navigateLibrary) }, navigate = ::navigateLibrary,
+                                    onBack = ::navigateBack, sheet = searchSheet, autoFocus = searchFocus, onFocused = { searchFocus = false },
+                                    recommendations = libraryHome.daily + libraryHome.forYou, recent = libraryHome.recent) { song ->
+                                    playWithPermission { container.playerController.playSong(song) }
+                                }
                             }
                         }
                     }
@@ -620,8 +681,51 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                             onSupport = { navigateLibrary(SupportConfig.route) })
                     }
                 }
-                entry(NETWORK.toString()) { MusicSettingsScreen(musicSettingsVm, onNavidrome = { navigateLibrary("navidrome") }, onEmby = { navigateLibrary("emby") }) }
-                entry("bili/login") { io.github.currencortex.music.feature.binding.BiliLoginScreen(container, onBack = ::navigateBack) }
+                entry(NETWORK.toString()) {
+                    MusicSettingsScreen(
+                        musicSettingsVm,
+                        onNavidrome = { navigateLibrary("navidrome") },
+                        onEmby = { navigateLibrary("emby") },
+                        onLocalMusic = { navigateLibrary("lib/local") },
+                        onImportPlaylist = { navigateLibrary("user/playlist-import") },
+                        onFreeRadio = { navigateLibrary("free-radio") },
+                        onWebDav = { navigateLibrary("webdav") },
+                        onMusicAssistant = { navigateLibrary("music-assistant") },
+                    )
+                }
+                entry("free-radio") {
+                    val radioVm: io.github.currencortex.music.feature.radio.FreeRadioViewModel =
+                        viewModel(factory = viewModelFactory {
+                            io.github.currencortex.music.feature.radio.FreeRadioViewModel()
+                        })
+                    io.github.currencortex.music.feature.radio.FreeRadioScreen(radioVm, ::navigateBack) { station ->
+                        playWithPermission {
+                            val id = station.id.hashCode().toLong().let { if (it < 0) -it else it }
+                            val song = Song(
+                                id = id,
+                                name = station.name,
+                                artists = listOf(station.country, station.tags.substringBefore(','))
+                                    .filter { it.isNotBlank() }.joinToString(" · "),
+                                album = "Radio Browser",
+                                cover = station.favicon,
+                                musicSource = io.github.currencortex.music.data.song.MusicSource.LOCAL,
+                                localUri = station.url,
+                            )
+                            container.playerController.playDirect(song, station.playable())
+                            navigateTo(PLAYER)
+                        }
+                    }
+                }
+                entry("bili/login") {
+                    io.github.currencortex.music.feature.binding.BiliLoginScreen(
+                        container,
+                        onBack = ::navigateBack,
+                        onSessionChanged = {
+                            biliSessionRevision++
+                            libraryVm.refresh()
+                        },
+                    )
+                }
                 entry("qq/login") {
                     io.github.currencortex.music.feature.binding.QqLoginScreen(
                         onBack = ::navigateBack,
@@ -648,6 +752,17 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                     io.github.currencortex.music.feature.navidrome.NavidromeScreen(navidromeVm, libraryVm, ::navigateLibrary,
                         { songs, index -> playWithPermission { container.playerController.playList(songs, index) } }, onBack = ::navigateBack)
                 }
+                entry("webdav") {
+                    io.github.currencortex.music.feature.connected.ConnectedSourceScreen(
+                        io.github.currencortex.music.feature.connected.ConnectedSourceKind.WEBDAV,
+                        musicSettingsVm, ::navigateBack,
+                        { songs, index -> playWithPermission { container.playerController.playList(songs, index) } })
+                }
+                entry("music-assistant") {
+                    io.github.currencortex.music.feature.connected.ConnectedSourceScreen(
+                        io.github.currencortex.music.feature.connected.ConnectedSourceKind.MUSIC_ASSISTANT,
+                        musicSettingsVm, ::navigateBack, { _, _ -> })
+                }
                 entry(EQUALIZER.toString()) {
                     val vm: io.github.currencortex.music.feature.settings.SoundEffectsViewModel = viewModel(factory = viewModelFactory {
                         io.github.currencortex.music.feature.settings.SoundEffectsViewModel(container)
@@ -668,14 +783,15 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                         SearchScreen(searchVm, container.playerController, actions = { LibrarySongActions(libraryVm, it, ::navigateLibrary) },
                             navigate = ::navigateLibrary,
-                            roomName = if (nativeTogether.active) "网易云双人一起听" else roomLive.detail?.room?.name.orEmpty(),
+                            roomName = "网易云双人一起听",
                             onBack = ::navigateBack, onPlay = ::requestSong)
                     }
                 }
                 entry("room/list") {
-                    val vm: RoomViewModel = viewModel(factory = viewModelFactory { RoomViewModel(container) })
-                    RoomScreen(vm, ::navigateBack, { navigateLibrary("room/search") }, { navigateTo(PLAYER) }, { roomDialogOpen = it },
-                        onBinding = { navigateLibrary("user/binding") })
+                    io.github.currencortex.music.feature.room.NeteaseListenTogetherScreen(container,
+                        onBack = ::navigateBack, onSearch = { navigateLibrary("room/search") },
+                        onPlayer = { navigateTo(PLAYER) }, onBinding = { navigateLibrary("user/binding") },
+                        onDialogActive = { roomDialogOpen = it })
                 }
                 entry(APPEARANCE.toString()) {
                     Box(Modifier.fillMaxSize().navigationBarsPadding()) {
@@ -791,6 +907,41 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                             route == "lib/recognition" -> io.github.currencortex.music.feature.recognition.MusicRecognitionScreen(::navigateBack) { songs, index ->
                                 playWithPermission { container.playerController.playList(songs, index) }
                             }
+                            route == "lib/bili/inspiration" -> {
+                                io.github.currencortex.music.feature.bili.BiliInspirationScreen(
+                                    container = container,
+                                    onBack = ::navigateBack,
+                                ) { videos, index, openVideo ->
+                                    if (openVideo) {
+                                        val video = videos[index.coerceIn(videos.indices)]
+                                        openBiliVideo(io.github.currencortex.music.feature.bili.BiliHubRepository.Video(
+                                            bvid = video.bvid,
+                                            title = video.title,
+                                            cover = video.cover,
+                                            uploader = video.owner.ifBlank { "哔哩哔哩" },
+                                            durationSec = video.durationSec,
+                                        ))
+                                    } else {
+                                        val songs = videos.map { video ->
+                                            io.github.currencortex.music.data.song.Song(
+                                                id = video.bvid.hashCode().toLong().let { if (it < 0) -it else it },
+                                                name = video.title,
+                                                artists = video.owner.ifBlank { "哔哩哔哩" },
+                                                durationMs = video.durationSec * 1000L,
+                                                cover = video.cover,
+                                                musicSource = io.github.currencortex.music.data.song.MusicSource.BILIBILI,
+                                                externalIds = io.github.currencortex.music.data.song.SongExternalIds(
+                                                    bilibiliBvid = video.bvid,
+                                                ),
+                                            )
+                                        }
+                                        playWithPermission {
+                                            container.playerController.playList(songs, index.coerceIn(songs.indices))
+                                            navigateTo(PLAYER)
+                                        }
+                                    }
+                                }
+                            }
                             route == "lib/playlists" -> PlaylistIndexScreen(libraryVm, ::navigateLibrary,
                                 play = { songs, index -> playWithPermission { container.playerController.playList(songs, index) } },
                                 onBack = ::navigateBack)
@@ -819,6 +970,20 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                                 io.github.currencortex.music.feature.artist.ArtistEncyclopedia(artistState, ::navigateBack,
                                     { artistVm.loadBiography() }, artistVm::loadProfile)
                             }
+                            route.startsWith("lib/qq/artist/") -> {
+                                val mid = route.substringAfterLast('/')
+                                val artistVm: io.github.currencortex.music.feature.artist.ArtistViewModel = viewModel(key = route,
+                                    factory = viewModelFactory { io.github.currencortex.music.feature.artist.ArtistViewModel(
+                                        container, mid.hashCode().toLong().let { if (it < 0) -it else it }, mid) })
+                                io.github.currencortex.music.feature.artist.ArtistScreen(artistVm, libraryVm, ::navigateBack, ::navigateLibrary) {
+                                    songs, index -> playWithPermission { container.playerController.playList(songs, index) }
+                                }
+                            }
+                            route.startsWith("lib/qq/discover/") -> {
+                                val categoryId = route.substringAfterLast('/').toLongOrNull() ?: 0L
+                                io.github.currencortex.music.feature.style.QqCategoryDetailScreen(
+                                    categoryId, ::navigateBack, ::navigateLibrary)
+                            }
                             route.startsWith("lib/artist/") -> {
                                 val artistVm: io.github.currencortex.music.feature.artist.ArtistViewModel = viewModel(key = route,
                                     factory = viewModelFactory { io.github.currencortex.music.feature.artist.ArtistViewModel(container,
@@ -840,6 +1005,15 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                                 else PlayerScreen(playerVm, ::navigateBack, { playWithPermission { container.playerController.toggle() } },
                                     onLike = if (currentSong?.emby == null) ({ currentSong?.let(libraryVm::choosePlaylist); Unit }) else null,
                                     onAiNavigate = ::navigateLibrary)
+                            route.startsWith("lib/qq/catalog/") -> {
+                                val parts = route.split('/')
+                                val catalogVm: CatalogViewModel = viewModel(key = route, factory = viewModelFactory {
+                                    CatalogViewModel(container, parts.getOrNull(3) == "album",
+                                        URLDecoder.decode(parts.getOrElse(4) { "" }, "UTF-8"),
+                                        io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+                                })
+                                CatalogScreen(catalogVm, ::navigateBack, ::navigateLibrary)
+                            }
                             route.startsWith("lib/browse/") -> {
                                 val parts = route.split('/')
                                 val catalogVm: CatalogViewModel = viewModel(key = route, factory = viewModelFactory {
@@ -860,6 +1034,71 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                         }
                     }
                 }
+                backStack.filter { it.startsWith("bili/") && it != "bili/login" }.distinct().forEach { route ->
+                    entry(route) {
+                        when {
+                            route.startsWith("bili/player/") -> {
+                                val payload = route.removePrefix("bili/player/")
+                                val bvid = URLDecoder.decode(payload.substringBefore('?'), "UTF-8")
+                                val cid = payload.substringAfter('?', "")
+                                    .split('&')
+                                    .firstOrNull { it.startsWith("cid=") }
+                                    ?.substringAfter('=')
+                                    ?.let { URLDecoder.decode(it, "UTF-8") }
+                                    .orEmpty()
+                                io.github.currencortex.music.feature.bili.player.BiliPlayerScreen(
+                                    container = container,
+                                    bvid = bvid,
+                                    initialCid = cid,
+                                    onBack = ::navigateBack,
+                                    onCreator = ::openBiliCreator,
+                                )
+                            }
+                            route == "bili/messages" -> io.github.currencortex.music.feature.bili.BiliMessagesScreen(
+                                container = container, onBack = ::navigateBack, onWeb = ::openBiliWeb)
+                            route == "bili/profile" -> {
+                                val mid = container.biliSession.profile?.mid ?: 0L
+                                if (mid > 0) io.github.currencortex.music.feature.bili.BiliProfileScreen(
+                                    container = container, mid = mid, onBack = ::navigateBack, onPlayVideo = ::openBiliVideo,
+                                    navigate = ::navigateLibrary)
+                                else LaunchedEffect(Unit) { navigateLibrary("bili/login") }
+                            }
+                            route.startsWith("bili/creator/") -> io.github.currencortex.music.feature.bili.BiliProfileScreen(
+                                container = container,
+                                mid = route.substringAfterLast('/').toLongOrNull() ?: 0L,
+                                onBack = ::navigateBack,
+                                onPlayVideo = ::openBiliVideo,
+                                navigate = ::navigateLibrary,
+                            )
+                            route == "bili/social/following" -> io.github.currencortex.music.feature.bili.BiliSocialScreen(
+                                container = container, followers = false, onBack = ::navigateBack, onCreator = ::openBiliCreator)
+                            route == "bili/social/followers" -> io.github.currencortex.music.feature.bili.BiliSocialScreen(
+                                container = container, followers = true, onBack = ::navigateBack, onCreator = ::openBiliCreator)
+                            route.startsWith("bili/folder/") -> io.github.currencortex.music.feature.bili.BiliFolderScreen(
+                                container = container,
+                                folderId = route.substringAfterLast('/').toLongOrNull() ?: 0L,
+                                onBack = ::navigateBack,
+                                onPlayVideo = ::openBiliVideo,
+                            )
+                            route == "bili/live" -> io.github.currencortex.music.feature.bili.BiliLiveHubScreen(
+                                container = container,
+                                onBack = ::navigateBack,
+                                onLive = ::openBiliLive,
+                            )
+                            route.startsWith("bili/live/") -> io.github.currencortex.music.feature.bili.BiliLiveScreen(
+                                roomId = route.substringAfterLast('/').toLongOrNull() ?: 0L,
+                                cookieHeader = container.biliSession.cookieHeader(),
+                                onBack = ::navigateBack,
+                            )
+                            route.startsWith("bili/web/") -> io.github.currencortex.music.feature.bili.BiliEmbeddedWebScreen(
+                                url = URLDecoder.decode(route.removePrefix("bili/web/"), "UTF-8"),
+                                cookieHeader = container.biliSession.cookieHeader(),
+                                title = "哔哩哔哩",
+                                onBack = ::navigateBack,
+                            )
+                        }
+                    }
+                }
             },
         )
         }
@@ -870,20 +1109,28 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         }
         val dockVisible by remember(keyboardOpen, sceneStack, settings.playlistRecordShelf) { derivedStateOf {
             sceneStack.last() !in setOf("lib/video", "appearance-font") && playerExpansion.value < .9999f &&
+                !isBiliPlayerRoute(sceneStack.last()) &&
                 !(settings.playlistRecordShelf && isPlaylistRoute(sceneStack.last()))
         } }
         val miniOverlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {
         KeyboardDockOverlay(keyboardOpen) {
         val unifiedDock = settings.floatingBar && !wideLayout
-        val standardNavigation = !unifiedDock && !keyboardOpen && (showRootNavigation && !rootWide || hasEmbyDock && !playerPresented)
+        val standardNavigation = !keyboardOpen && ((biliMode && showRootNavigation) ||
+            (!unifiedDock && (showRootNavigation && !rootWide || hasEmbyDock && !playerPresented)))
         // When the tabs are absent or collapsed, the mini is the bottommost visible surface.
         val glowOnStandardBar = standardNavigation && !dockCollapsed
-        val glow: (@Composable (Modifier) -> Unit)? = if (settings.navigationGlow && currentSong != null) {
+        val glow: (@Composable (Modifier) -> Unit)? = if (!biliMode && settings.navigationGlow && currentSong != null) {
             { modifier -> NavigationGlow(currentSong?.cover.orEmpty(), playerVm.state, container.dockAudioLevel, modifier,
                 active = dockVisible && !keyboardOpen && !playerPresented && !miniQueueOpen) }
         } else null
         val miniBody: @Composable () -> Unit = {
-        MiniPlayer(playerVm, { if (currentSong?.video == true) navigateLibrary("lib/video") else navigateTo(PLAYER) },
+        MiniPlayer(playerVm, {
+            if (currentSong?.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI &&
+                !currentSong?.externalIds?.bilibiliBvid.isNullOrBlank()) {
+                navigateLibrary("bili/player/" + URLEncoder.encode(
+                    currentSong?.externalIds?.bilibiliBvid.orEmpty(), "UTF-8"))
+            } else if (currentSong?.video == true) navigateLibrary("lib/video") else navigateTo(PLAYER)
+        },
             { playWithPermission { container.playerController.toggle() } },
             if (unifiedDock) Modifier.onSizeChanged { miniHeight = with(density) { it.height.toDp() } + UnifiedMiniScrollClearance }
             else Modifier.navigationBarsPadding().graphicsLayer {
@@ -894,7 +1141,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                 .onSizeChanged { miniHeight = with(density) { it.height.toDp() } }.padding(horizontal = 12.dp, vertical = 8.dp),
             onNext = { container.playerController.next(container.playerController.state.value.showPause) },
             onPrevious = { container.playerController.previous(container.playerController.state.value.showPause) },
-            onQueue = { if (playerState.mode == PlayerMode.ROOM && !container.listenTogether.state.value.active) navigateLibrary("room/list") else {
+            onQueue = { if (playerState.mode == PlayerMode.ROOM) navigateLibrary("room/list") else {
                 miniQueueTransition.capture(currentSong, miniArtworkOrigin?.invoke(), artworkTransition.text)
                 miniQueueOpen = true
             } },
@@ -902,7 +1149,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
             onArtworkOrigin = { miniArtworkOrigin = it }, artworkVisible = { !artworkTransition.moving && !miniQueueTransition.coverMoving },
             onOpenBounds = { miniOpenBounds = it }, glow = if (!unifiedDock && !glowOnStandardBar) glow else null)
         }
-        if (unifiedDock) {
+        if (unifiedDock && !biliMode) {
             val glassNavigation = LocalMusicDockNavigation.current
             UnifiedMusicDock(expanded = (miniRoot || hasEmbyDock) && !keyboardOpen && !dockCollapsed,
                 visible = dockVisible,
@@ -915,7 +1162,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                 glow = {
                     glow?.invoke(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(88.dp))
                 })
-        } else if (miniRetainedAvailable) RetainedOverlay(dockVisible, Modifier.align(Alignment.BottomCenter)
+        } else if (miniRetainedAvailable && !biliMode) RetainedOverlay(dockVisible, Modifier.align(Alignment.BottomCenter)
             .then(if (playerPresented || miniQueueOpen) Modifier.clearAndSetSemantics {} else Modifier)
             .graphicsLayer { alpha = 1f - playerSheetSurfaceAlpha(playerExpansion.value) }) {
             miniBody()
@@ -947,7 +1194,13 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                 !roomDialogOpen && songMenu == null && !playerDialogOpen && !miniQueueOpen,
             // Only the tap target that reverses a closing sheet needs the moving dock bounds.
             miniOpenBounds = if (miniAvailable && playerSheetMotion == PlayerSheetMotion.CLOSE) miniOpenBounds else null,
-            onReopen = { if (currentSong?.video == true) navigateLibrary("lib/video") else navigateTo(PLAYER) },
+            onReopen = {
+                if (currentSong?.musicSource == io.github.currencortex.music.data.song.MusicSource.BILIBILI &&
+                    !currentSong?.externalIds?.bilibiliBvid.isNullOrBlank()) {
+                    biliVideoRequest++
+                    navigateTo(PLAYER)
+                } else if (currentSong?.video == true) navigateLibrary("lib/video") else navigateTo(PLAYER)
+            },
             onBack = ::navigateBack, onSettled = { playerSheetMotion = PlayerSheetMotion.NONE }) {
             CompositionLocalProvider(LocalMusicPageActive provides !playerEffectsPresented) {
             playerSavedState.SaveableStateProvider(PLAYER) {
@@ -958,7 +1211,9 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
                     onDialogActive = { playerDialogOpen = it }, onNetwork = { navigateTo(NETWORK) },
                     onLike = if (currentSong?.emby == null) ({ currentSong?.let(libraryVm::choosePlaylist); Unit }) else null, onEqualizer = { playerEffectsOpen = true },
                     onAiNavigate = ::navigateLibrary, roamingRequest = roamingRequest,
-                    onRoamingRequestConsumed = { roamingRequest = 0 })
+                    onRoamingRequestConsumed = { roamingRequest = 0 },
+                    biliVideoRequest = biliVideoRequest,
+                    onBiliVideoRequestConsumed = { biliVideoRequest = 0 })
             }
         }
         }
@@ -1053,7 +1308,7 @@ fun CurrentMusicApp(container: AppContainer, animateLaunch: Boolean = false, ope
         }
         }
         AvatarFlightOverlay(avatarFlight)
-        // B站 面板宿主：UP 主主页 / 相关推荐
+        // 哔哩哔哩 面板宿主：UP 主主页 / 相关推荐
         var biliCreatorMid by remember { mutableStateOf<Long?>(null) }
         var biliRelatedBvid by remember { mutableStateOf<String?>(null) }
         var biliToast by remember { mutableStateOf<String?>(null) }

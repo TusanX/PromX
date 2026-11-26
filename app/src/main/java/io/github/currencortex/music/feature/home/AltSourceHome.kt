@@ -70,12 +70,12 @@ private fun themeFor(source: MusicSource) = when (source) {
     )
     else -> AltSourceTheme(
         accent = Color(0xFFFB7299), icon = R.drawable.brand_bilibili,
-        heroTitle = "B站推荐", heroSubtitle = "从你的推荐流和音乐区，接住正在流行的内容",
-        chartTitle = "B站正在流行", recentTitle = "观看历史", playlistsTitle = "我的收藏夹",
+        heroTitle = "哔哩哔哩推荐", heroSubtitle = "从你的推荐流和音乐区，接住正在流行的内容",
+        chartTitle = "哔哩哔哩正在流行", recentTitle = "观看历史", playlistsTitle = "我的收藏夹",
     )
 }
 
-/** QQ/B站 share the app's information architecture but get source-specific discovery and actions. */
+/** QQ/哔哩哔哩 share the app's information architecture but get source-specific discovery and actions. */
 @Composable internal fun AltSourceHomeContent(
     source: MusicSource,
     home: LibraryHomeState,
@@ -128,16 +128,34 @@ private fun themeFor(source: MusicSource) = when (source) {
             )
         }
         item(key = "source_hero") {
-            SourceHeroCard(
-                visual, source, home.daily, loading,
-                connected = connected,
-                canPlay = request == null && home.daily.isNotEmpty(),
-                onPlay = { playAt(home.daily, 0) },
-                onOpen = { navigate("lib/daily") },
-                onLogin = { navigate(if (source == MusicSource.QQ_MUSIC) "qq/login" else "bili/login") },
-            )
+            if (source == MusicSource.QQ_MUSIC) {
+                DailyRecommendationHero(
+                    songs = home.daily,
+                    loading = loading,
+                    error = home.errors["每日推荐"],
+                    discovery = !connected,
+                    playback = playback,
+                    onPlay = { index -> playAt(home.daily, index) },
+                    onOpen = { navigate("lib/daily") },
+                    onRetry = onRetry,
+                    onConnect = { navigate("qq/login") },
+                    dateLabel = java.time.LocalDate.now().let { "${it.monthValue}月${it.dayOfMonth}日" },
+                    room = request,
+                    sourceLabel = "QQ 音乐",
+                )
+            } else SourceHeroCard(
+                    visual, source, home.daily, loading,
+                    connected = connected,
+                    canPlay = request == null && home.daily.isNotEmpty(),
+                    onPlay = { playAt(home.daily, 0) },
+                    onOpen = { navigate("lib/daily") },
+                    onLogin = { navigate("bili/login") },
+                )
         }
         item(key = "shortcuts") { SourceShortcuts(source, navigate) }
+        if (source == MusicSource.QQ_MUSIC && !connected) {
+            item(key = "qq_connection_guide") { QqConnectionGuide { navigate("qq/login") } }
+        }
         if (error != null) item(key = "retry") {
             MusicTextAction("部分内容加载失败，重新加载", onRetry, Modifier.testTag("alt_home_retry"), !loading)
         }
@@ -162,26 +180,62 @@ private fun themeFor(source: MusicSource) = when (source) {
             }
         }
 
-        item(key = "chart_header") {
-            SettingsListHeader(visual.chartTitle) {
-                GlassActionButton("全部", { navigate("lib/daily") }, fillWidth = false, minHeight = 36.dp)
+        if (source == MusicSource.QQ_MUSIC && home.recommendedPlaylists.isNotEmpty()) {
+            item(key = "recommended_playlists_header") { SettingsListHeader("为你推荐歌单") }
+            item(key = "recommended_playlists") {
+                ElasticLazyRow(edgeToEdgeInset = 16.dp) {
+                    itemsIndexed(home.recommendedPlaylists, key = { _, playlist -> "recommended-${playlist.id}" }) { _, playlist ->
+                        MusicArtworkCard(
+                            cover = playlist.cover.ifBlank { playlist.songs.firstOrNull()?.cover.orEmpty() },
+                            title = playlist.name,
+                            subtitle = if (playlist.count > 0) "${playlist.count} 首" else "QQ 音乐推荐",
+                            onClick = { navigate("lib/playlist/${playlist.id}") },
+                            modifier = Modifier.width(154.dp).testTag("alt_home_recommended_playlist_${playlist.id}"),
+                            onLongClick = { bounds -> onPlaylistPreview(playlist, bounds) },
+                        )
+                    }
+                }
             }
         }
-        if (loading && home.daily.isEmpty()) item(key = "chart_loading") { LoadingSongList(3) }
-        itemsIndexed(home.daily.take(8), key = { _, song -> "daily-${song.id}" }) { index, song ->
-            AltRankedRow(
-                rank = index + 1, song = song, accent = visual.accent,
-                playing = playback.song?.id == song.id && playback.showPause,
-                onPlay = { playAt(home.daily, index) },
-                onPreview = { bounds -> onSongPreview(song, bounds) },
-            )
+
+        if (source == MusicSource.BILIBILI) {
+            item(key = "chart_header") {
+                SettingsListHeader(visual.chartTitle) {
+                    GlassActionButton("全部", { navigate("lib/daily") }, fillWidth = false, minHeight = 36.dp)
+                }
+            }
+            if (loading && home.daily.isEmpty()) item(key = "chart_loading") { LoadingSongList(3) }
+            itemsIndexed(home.daily.take(8), key = { _, song -> "daily-${song.id}" }) { index, song ->
+                AltRankedRow(
+                    rank = index + 1, song = song, accent = visual.accent,
+                    playing = playback.song?.id == song.id && playback.showPause,
+                    onPlay = { playAt(home.daily, index) },
+                    onPreview = { bounds -> onSongPreview(song, bounds) },
+                )
+            }
+            if (!loading && home.daily.isEmpty() && error == null) item(key = "chart_empty") {
+                SourceEmptyState("还没有拿到 哔哩哔哩 推荐", "登录 哔哩哔哩 后会优先使用你的推荐流", "重新加载", onRetry)
+            }
         }
-        if (!loading && home.daily.isEmpty() && error == null) item(key = "chart_empty") {
-            SourceEmptyState(
-                title = if (source == MusicSource.QQ_MUSIC) "每日推荐暂时为空" else "还没有拿到 B站 推荐",
-                detail = if (source == MusicSource.QQ_MUSIC) "稍后刷新，或直接搜索一首歌" else "登录 B站 后会优先使用你的推荐流",
-                action = "重新加载", onAction = onRetry,
-            )
+
+        if (source == MusicSource.QQ_MUSIC && home.dailyHistory.isNotEmpty()) {
+            item(key = "daily_history_header") {
+                SettingsListHeader("往期日推 · ${home.dailyHistoryDate.replace('-', '.')}")
+            }
+            item(key = "daily_history") {
+                ElasticLazyRow(edgeToEdgeInset = 16.dp) {
+                    itemsIndexed(home.dailyHistory.take(10), key = { _, song -> "history-${song.id}" }) { index, song ->
+                        MusicArtworkCard(
+                            cover = song.cover,
+                            title = song.name,
+                            subtitle = song.artists.ifBlank { "QQ 音乐" },
+                            onClick = { playAt(home.dailyHistory, index) },
+                            modifier = Modifier.width(148.dp).testTag("qq_daily_history_${song.id}"),
+                            onLongClick = { bounds -> onSongPreview(song, bounds) },
+                        )
+                    }
+                }
+            }
         }
 
         item(key = "recent_header") { SettingsListHeader(visual.recentTitle) { GlassActionButton("全部", { navigate("lib/recent") }, fillWidth = false, minHeight = 36.dp) } }
@@ -193,8 +247,8 @@ private fun themeFor(source: MusicSource) = when (source) {
         } else if (!loading) item(key = "recent_empty") {
             SettingsHint(
                 if (source == MusicSource.QQ_MUSIC) "在 PromX 播放过的 QQ 音乐，会出现在这里"
-                else if (home.errors["最近播放"] != null) "B站 历史读取失败，登录后可重新同步"
-                else "播放 B站 内容后会同步观看历史",
+                else if (home.errors["最近播放"] != null) "哔哩哔哩 历史读取失败，登录后可重新同步"
+                else "播放 哔哩哔哩 内容后会同步观看历史",
             )
         }
 
@@ -218,16 +272,48 @@ private fun themeFor(source: MusicSource) = when (source) {
             }
         } else if (!loading) item(key = "playlists_empty") {
             SourceEmptyState(
-                title = if (source == MusicSource.QQ_MUSIC) "连接后同步你的 QQ 歌单" else "连接后同步 B站 收藏夹",
+                title = if (source == MusicSource.QQ_MUSIC) "连接后同步你的 QQ 歌单" else "连接后同步 哔哩哔哩 收藏夹",
                 detail = "账号凭据只保存在本机，公开推荐和搜索无需登录",
                 action = if (source == MusicSource.QQ_MUSIC) "连接 QQ 音乐" else "连接哔哩哔哩",
                 onAction = { navigate(if (source == MusicSource.QQ_MUSIC) "qq/login" else "bili/login") },
             )
         }
         item(key = "refresh") {
-            MusicTextAction(if (loading) "正在同步音乐来源…" else "刷新 ${if (source == MusicSource.QQ_MUSIC) "QQ 音乐" else "B站"} 内容",
+            MusicTextAction(if (loading) "正在同步音乐来源…" else "刷新 ${if (source == MusicSource.QQ_MUSIC) "QQ 音乐" else "哔哩哔哩"} 内容",
                 onRetry, Modifier.fillMaxWidth().testTag("alt_home_refresh"), !loading)
         }
+    }
+}
+
+@Composable
+private fun QqConnectionGuide(onLogin: () -> Unit) {
+    val colors = MiuixTheme.colorScheme
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+            .background(colors.surfaceContainer).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("连接后会多出这些内容", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf(
+                "我喜欢" to "同步红心与云端状态",
+                "最近播放" to "按真实收听顺序排列",
+                "往期日推" to "回看过去每一天",
+            ).forEach { (title, detail) ->
+                Column(
+                    Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                        .background(colors.onSurface.copy(alpha = .045f)).padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(detail, fontSize = 10.sp, lineHeight = 14.sp, color = colors.onSurface.copy(alpha = .52f))
+                }
+            }
+        }
+        ElasticPress(
+            Modifier.clip(CircleShape).background(Color(0xFF31C27C)).clickable(role = Role.Button, onClick = onLogin)
+                .padding(horizontal = 16.dp, vertical = 9.dp).align(Alignment.End),
+        ) { Text("扫码连接 QQ 音乐", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium) }
     }
 }
 
@@ -321,14 +407,16 @@ private fun HeroPill(label: String, accent: Color, enabled: Boolean, onClick: ()
 private fun SourceShortcuts(source: MusicSource, navigate: (String) -> Unit) {
     val items = if (source == MusicSource.QQ_MUSIC) listOf(
         Triple("每日推荐", "lib/daily", MusicIcons.List),
+        Triple("私人 FM", "lib/foryou", MusicIcons.Play),
         Triple("我喜欢", "lib/likes", MusicIcons.Heart),
         Triple("歌单", "lib/playlists", MusicIcons.Folder),
         Triple("最近", "lib/recent", MusicIcons.Update),
     ) else listOf(
+        Triple("励志仙尊", "lib/bili/inspiration", MusicIcons.Rocket),
         Triple("推荐流", "lib/foryou", MusicIcons.Play),
         Triple("收藏夹", "lib/playlists", MusicIcons.Folder),
         Triple("历史", "lib/recent", MusicIcons.Update),
-        Triple("B站缓存", "lib/local", MusicIcons.Download),
+        Triple("哔哩哔哩缓存", "lib/local", MusicIcons.Download),
     )
     SettingsGroup {
         Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp)) {

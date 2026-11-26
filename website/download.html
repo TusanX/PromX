@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#090a0c">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="下载最新版 PromX Android 应用。页面始终读取腾讯云最新版本清单，并在本地合并分片和校验 SHA-256。">
+  <title>下载 PromX — Android 版</title>
+  <link rel="icon" href="assets/brand/favicon.png" type="image/png">
+  <link rel="stylesheet" href="download.css?v=6">
+  <script src="download.js?v=5" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#downloadMain">跳到下载内容</a>
+  <div class="download-lyrics" aria-hidden="true"><span>如果只能许下一个愿望</span><span>moshi mo negai hitotsu dake</span><span>Where the world full of flowers</span></div>
+  <header class="download-header">
+    <a class="download-brand" href="index.html" aria-label="PromX 首页"><img src="assets/brand/promx-icon.png" width="28" height="28" alt=""><span>PromX</span></a>
+    <a class="back-link" href="index.html">返回官网</a>
+  </header>
+
+  <main class="download-main" id="downloadMain">
+    <section class="download-intro">
+      <p class="download-statusline"><span class="status-dot" aria-hidden="true"></span>Android 8.0 及以上</p>
+      <h1>下载 PromX</h1>
+      <p class="download-lead">页面打开时会向腾讯云重新读取最新清单。下方显示的版本、文件大小和 SHA-256 都来自当前发布记录。</p>
+
+      <dl class="download-specs">
+        <div><dt>版本</dt><dd id="releaseVersion">正在读取</dd></div>
+        <div><dt>构建</dt><dd id="releaseBuild">—</dd></div>
+        <div><dt>大小</dt><dd id="releaseSize">—</dd></div>
+        <div><dt>发布</dt><dd id="releaseDate">—</dd></div>
+      </dl>
+
+      <div class="download-notes">
+        <p>文件由腾讯云 COS 分片提供，浏览器在本地合并。</p>
+        <p>下载完成后校验 SHA-256，校验不通过不会保存安装包。</p>
+        <p>安装包使用 PromX 发布证书签名，Android 系统会保留后续更新身份。</p>
+      </div>
+    </section>
+
+    <section class="download-panel" aria-labelledby="packageTitle">
+      <div class="package-head">
+        <img src="assets/brand/promx-icon.png" width="68" height="68" alt="PromX 应用图标">
+        <div><span>最新稳定版</span><h2 id="packageTitle">PromX Android</h2></div>
+      </div>
+
+      <div class="package-meta">
+        <span>APK</span><span id="packageVersion">读取中</span><span id="packageSize">—</span>
+      </div>
+
+      <button class="download-button" id="startDownload" type="button" disabled>
+        <span>正在读取最新版本</span>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4L6 9M4 16h12"/></svg>
+      </button>
+
+      <div class="progress-track" aria-hidden="true"><i id="progressBar"></i></div>
+      <p class="download-status" id="downloadStatus" aria-live="polite">正在连接腾讯云版本清单</p>
+
+      <div class="package-hash">
+        <span>SHA-256</span>
+        <code id="packageSha">读取最新清单后显示</code>
+      </div>
+    </section>
+  </main>
+
+  <footer class="download-footer">
+    <p>PromX 不托管音乐文件。音乐服务可用性取决于来源平台、账号地区和版权状态。</p>
+    <nav aria-label="下载页链接"><a href="https://github.com/TusanX/PromX" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/TusanX/PromX/issues" target="_blank" rel="noreferrer">反馈</a><a href="https://github.com/TusanX/PromX/blob/main/LICENSE" target="_blank" rel="noreferrer">许可证</a></nav>
+  </footer>
+</body>
+</html>

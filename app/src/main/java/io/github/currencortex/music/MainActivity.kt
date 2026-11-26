@@ -158,7 +158,9 @@ class MainActivity : ComponentActivity() {
         val density = resources.displayMetrics.density
         // The final video frame keeps the note in the lower part of its square. Anchor the
         // wordmark from that visible edge so the gap stays consistent on different screens.
-        val titleTop = metrics.heightPixels / 2f + side * .20f + 64f * density
+        val portrait = metrics.heightPixels > metrics.widthPixels
+        val identityLift = if (portrait) minOf(52f * density, metrics.heightPixels * .045f) else 0f
+        val titleTop = metrics.heightPixels / 2f + side * .20f - identityLift + 48f * density
         val identity = FrameLayout(this).apply {
             visibility = View.VISIBLE
             addView(
@@ -172,7 +174,10 @@ class MainActivity : ComponentActivity() {
                 },
             )
         }
-        val videoView = TextureView(this).apply { isClickable = false }
+        val videoView = TextureView(this).apply {
+            isClickable = false
+            translationY = -identityLift
+        }
         root.addView(videoView, FrameLayout.LayoutParams(side, side, Gravity.CENTER))
         root.addView(identity, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,

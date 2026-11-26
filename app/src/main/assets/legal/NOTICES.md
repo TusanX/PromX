@@ -300,6 +300,23 @@ an exemption for these AGPL-covered components. Corresponding application source
 build instructions are available through the application's configured GitHub source link.
 
 
+## Folia Metaphor lyric style (native Android adaptation)
+
+Copyright chthollyphile and Folia contributors. `MetaphorLyrics.kt` adapts the visual
+language of Folia's `visualizer/metaphor` lyric style: ink and paper tones, halftone
+screen, sandpaper grain, hard-cut verse changes, camera drift, keyword emphasis and a
+low-power reduced-motion fallback. Folia's three.js shaders and Pixi runtime are replaced
+with Compose drawing and native text, while PromX's media clock, word timing, translation,
+romanization, seeking and accessibility contracts remain authoritative.
+
+This adaptation is AGPL-3.0-only. The complete license is bundled at `legal/AGPL-3.0.txt`.
+
+The offline `assets/folia-stage` bundle is built from Folia Major's official WebGL
+visualizer implementation and is loaded through the local Android asset origin. It is
+distributed under AGPL-3.0-only. PromX supplies playback time, lyrics, artwork colours
+and the current song through `FoliaStageView.kt`; the visual scene itself remains the
+upstream implementation.
+
 ## Folia per-song lyric management, matching and synchronization (Android port)
 
 Copyright chthollyphile and Folia contributors. Reference version:
@@ -474,3 +491,30 @@ The listening statistics page uses MiSans Semibold and Bold. Copyright (c) 2020â
 ## Listening page reference artwork
 
 The native listening page follows the layout and animation of NetEase Cloud Musicâ€™s official listening footprint page (https://sg.music.163.com/st/listen-home/index.html). The TOP stars use the original `icon_top_red.8c1a4229.png` and `icon_top_yellow.aa8fe8de.png`. The period arrows use the original `light_left_enable`, `light_left_disable`, `light_right_enable` and `light_right_disable` PNG assets. The duration information icon is the original `durationTipBtnLight.2276dcce.png`. The light sweep image is the original `rayIconLight.57e5d8a6.png`; badge, annual decoration and report artwork load from their original NetEase HTTPS URLs. These reference assets belong to their respective rights holders; they are not relicensed under this project's license. Account credentials are handled only by the existing native NetEase transport.
+
+## Bilimiao video playback and danmaku interoperability
+
+The optional Bilibili video screen and danmaku presentation follow the interaction model and
+public playback contracts of [10miaomiao/bilimiao2](https://github.com/10miaomiao/bilimiao2),
+GPL-3.0, commit `d60a9477e7b3a3d1bfe7570e43ab9370803a8a6b`. PromX keeps its existing
+MediaSession player, source resolution, account session, comments, favorites and download
+transports. The native Compose implementation was adapted for PromX in November 2026 and is
+GPL-3.0-only.
+
+The existing WBI request-signing helper retains its MIT attribution to Bilight:
+https://github.com/Ownhelm/Bilight. It is a transport utility and does not define the new video
+screen, its layout or its controls.
+
+## Halcyon, Retro Music Player and Music Assistant interoperability
+
+PromX's WebDAV discovery, local tag editing, home-screen player widget,
+Android media-session integration and Music Assistant connection adapters were
+implemented against the public behavior and API conventions documented by:
+
+- Halcyon, Apache-2.0: https://github.com/Kifranei/Halcyon
+- Retro Music Player, GPL-3.0: https://github.com/RetroMusicPlayer/RetroMusicPlayer
+- Music Assistant mobile client, Apache-2.0: https://github.com/music-assistant/mobile-app
+
+The implementation in PromX is native Kotlin and Compose code. It does not bundle
+the upstream applications or their artwork. Music Assistant command names and
+wire formats are interoperability facts from the public client protocol.

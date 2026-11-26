@@ -29,15 +29,26 @@ import java.util.concurrent.atomic.AtomicBoolean
 class AudioCache(context: Context, directory: File,
     client: OkHttpClient = OkHttpClient.Builder().connectTimeout(8, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS).build(),
     val maxBytes: Long = DEFAULT_MAX_BYTES,
-    /** 备用音源（B站/QQ）的媒体请求需要额外请求头；由容器注入，避免依赖登录态时拿不到 Cookie */
+    /** 备用音源（哔哩哔哩/QQ）的媒体请求需要额外请求头；由容器注入，避免依赖登录态时拿不到 Cookie */
     extraHeaders: () -> Map<String, String> = { emptyMap() }) : java.io.Closeable {
-    // B站新版视频的 CDN 会校验会话：不带 Cookie 直接 403
+    // 哔哩哔哩新版视频的 CDN 会校验会话：不带 Cookie 直接 403
     private val client: OkHttpClient = client.newBuilder()
         .addInterceptor { chain ->
             val req = chain.request()
             val host = req.url.host
-            val headers = if (host.contains("bilivideo") || host.contains("bilibili") ||
-                host.contains("qqmusic") || host.contains("qq.com")) extraHeaders() else emptyMap()
+            // Bilibili rotates between bilivideo.com and independent edge/mirror hosts. The
+            // signed media query, not the hostname, identifies those child DASH requests.
+            val biliSignedMedia = req.url.queryParameter("upsig") != null ||
+                req.url.queryParameter("deadline") != null ||
+                req.url.encodedPath.contains("/upgcxcode/") ||
+                req.url.encodedPath.contains(".m4s")
+            val knownProviderHost = host.contains("bilivideo") || host.contains("bilibili") ||
+                host.contains("qqmusic") || host.contains("qq.com")
+            // CDNs may redirect signed Bilibili media to an opaque edge hostname. Referer and
+            // User-Agent are non-secret and remain valid after that redirect; account cookies are
+            // still restricted to Bilibili/QQ hosts or a URL that carries Bilibili's signature.
+            val headers = if (knownProviderHost || biliSignedMedia) extraHeaders()
+            else extraHeaders().filterKeys { it.equals("Referer", true) || it.equals("User-Agent", true) }
             if (headers.isEmpty()) chain.proceed(req) else {
                 val b = req.newBuilder()
                 headers.forEach { (k, v) -> b.header(k, v) }

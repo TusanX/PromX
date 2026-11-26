@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// B站 动作图标：移植自 Bilight（MIT License, Copyright (c) 2026 Bilight contributors）
+// 哔哩哔哩 动作图标：移植自 Bilight（MIT License, Copyright (c) 2026 Bilight contributors）
 // https://github.com/Ownhelm/Bilight — android/app/src/main/kotlin/app/bilight/android/ui/BiliActionIcon.kt
-// 只保留了 PromX 用得到的「点赞 / 收藏 / 评论」，颜色改为跟随页面传入（B站 模式用粉色）。
+// 只保留了 PromX 用得到的「点赞 / 收藏 / 评论」，颜色改为跟随页面传入（哔哩哔哩 模式用粉色）。
 package io.github.currencortex.music.ui.component
 
 import androidx.compose.foundation.Canvas

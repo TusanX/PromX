@@ -178,6 +178,32 @@ class PlayerController(private val context: Context, override val queue: Playbac
     }
     fun playList(songs: List<Song>, index: Int) { if (!localOnly()) return; beforeVideo = null; queue.replace(songs, index); load() }
     fun playSong(song: Song) { if (!localOnly()) return; beforeVideo = null; queue.playSong(song); load() }
+    /** Plays a public live stream without pretending it belongs to a subscription catalog. */
+    fun playDirect(song: Song, source: io.github.currencortex.music.data.song.AudioSource) {
+        if (!localOnly()) return
+        beforeVideo = null
+        queue.replace(listOf(song), 0)
+        scope.launch(Dispatchers.Main.immediate) {
+            val action = ++transportGeneration
+            commandIntent = true
+            state.value = state.value.copy(song = song, loading = true, playRequested = true, resolving = false,
+                audioInfo = AudioStreamInfo.from(source), positionMs = 0, durationMs = 0, error = null,
+                bufferedPositionMs = 0, audioFullyCached = false)
+            try {
+                val connected = connect()
+                if (action != transportGeneration) return@launch
+                connected.sendCustomCommand(SessionCommand(MusicService.PLAY_DIRECT, Bundle.EMPTY), Bundle().apply {
+                    putString("song", ApiJson.encodeToString(song))
+                    putString("url", source.url)
+                    putString("source", ApiJson.encodeToString(source))
+                }).await()
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                if (action == transportGeneration) state.value = state.value.copy(playRequested = false,
+                    loading = false, resolving = false, error = "无法打开这个公开音频流")
+            } finally { if (action == transportGeneration) commandIntent = null }
+        }
+    }
     fun toggle() = scope.launch(Dispatchers.Main.immediate) {
         if (videoHold) return@launch
         if (!transportAllowed()) return@launch

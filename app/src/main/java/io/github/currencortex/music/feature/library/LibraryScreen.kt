@@ -26,7 +26,39 @@ import top.yukonga.miuix.kmp.basic.*
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
-fun catalogRoute(album: Boolean, query: String = "") = "lib/browse/${if (album) "album" else "artist"}/${URLEncoder.encode(query, StandardCharsets.UTF_8.name())}"
+fun catalogRoute(album: Boolean, query: String = "",
+    source: io.github.currencortex.music.data.song.MusicSource = io.github.currencortex.music.data.song.MusicSource.NETEASE): String {
+    val encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
+    return if (source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+        "lib/qq/catalog/${if (album) "album" else "artist"}/$encoded"
+    else "lib/browse/${if (album) "album" else "artist"}/$encoded"
+}
+
+fun albumRoute(album: Album): String = if (album.source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+    "lib/qq/album/${album.remoteKey.ifBlank { album.id }}" else "lib/album/${album.id}"
+
+fun artistRoute(artist: CatalogEntry): String = if (artist.source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+    "lib/qq/artist/${artist.remoteKey.ifBlank { artist.id }}" else "lib/artist/${artist.id}"
+
+fun songArtistRoutes(song: Song): List<Pair<String, String>> {
+    val names = song.artists.split(" / ")
+    if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC) {
+        return song.externalIds.qqArtistMids.mapIndexed { index, mid ->
+            names.getOrNull(index).orEmpty().ifBlank { "歌手 ${index + 1}" } to "lib/qq/artist/$mid"
+        }
+    }
+    return song.artistIds.mapIndexed { index, id ->
+        names.getOrNull(index).orEmpty().ifBlank { "歌手 ${index + 1}" } to "lib/artist/$id"
+    }
+}
+
+fun songAlbumRoute(song: Song): String? = when {
+    song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC &&
+        !song.externalIds.qqAlbumMid.isNullOrBlank() -> "lib/qq/album/${song.externalIds.qqAlbumMid}"
+    song.musicSource == io.github.currencortex.music.data.song.MusicSource.NETEASE && song.albumId > 0 -> "lib/album/${song.albumId}"
+    song.album.isNotBlank() -> catalogRoute(true, song.album, song.musicSource)
+    else -> null
+}
 
 @Composable fun LibraryLinks(navigate: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -60,27 +92,40 @@ fun catalogRoute(album: Boolean, query: String = "") = "lib/browse/${if (album) 
 
 /** Shared actions for the song sheet and artwork's nested glass menu. */
 @Composable internal fun librarySongMenuItems(vm: LibraryViewModel, song: Song, navigate: (String) -> Unit): List<GlassMenuItem> {
-    if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.LOCAL) return emptyList()
+    if (song.musicSource in setOf(io.github.currencortex.music.data.song.MusicSource.LOCAL,
+            io.github.currencortex.music.data.song.MusicSource.WEBDAV,
+            io.github.currencortex.music.data.song.MusicSource.MUSIC_ASSISTANT)) return emptyList()
     if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.EMBY) {
         return listOf(GlassMenuItem("song_like_${song.id}", "喜欢 / 取消喜欢", onClick = { vm.togglePrimaryLike(song) }),
             GlassMenuItem("song_emby", "打开 Emby 曲库", onClick = { navigate("emby") }))
     }
     val statuses by vm.statuses.collectAsStateWithLifecycle()
+    val dislikeStates by vm.dislikeStates.collectAsStateWithLifecycle()
     val status = statuses[song.id] ?: SongStatus()
     LaunchedEffect(song.id) { vm.refreshStatuses(listOf(song)) }
+    LaunchedEffect(song.id, song.externalIds.qqNumericId) { vm.refreshDislikeState(song) }
     return buildList {
         add(GlassMenuItem("song_like_${song.id}", "喜欢 / 取消喜欢", enabled = !status.pending && !song.video,
             onClick = { vm.togglePrimaryLike(song) }))
+        if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC &&
+            !song.externalIds.qqNumericId.isNullOrBlank()) {
+            val dislike = dislikeStates[song.id] ?: SongDislikeState()
+            add(GlassMenuItem("song_dislike_${song.id}", if (dislike.disliked == true) "撤销不喜欢" else "不喜欢这首歌",
+                subtitle = if (dislike.disliked == true) "恢复到 QQ 音乐推荐" else "减少这首歌及相似推荐",
+                enabled = !dislike.pending,
+                onClick = { vm.toggleDislike(song) }))
+        }
         add(GlassMenuItem("song_playlist_${song.id}", "加入歌单", onClick = { vm.choosePlaylist(song) }))
         if (song.musicSource == io.github.currencortex.music.data.song.MusicSource.NAVIDROME) {
             add(GlassMenuItem("song_navidrome", "打开 Navidrome 曲库", onClick = { navigate("navidrome") }))
             return@buildList
         }
-        if (song.artistIds.isNotEmpty()) song.artistIds.forEachIndexed { index, id ->
-            add(GlassMenuItem("song_artist_$id", "歌手 · ${song.artists.split(" / ").getOrNull(index).orEmpty()}",
-                onClick = { navigate("lib/artist/$id") }))
-        } else if (song.artists.isNotBlank()) add(GlassMenuItem("song_artist", "查看歌手", onClick = { navigate(catalogRoute(false, song.artists)) }))
-        if (song.album.isNotBlank()) add(GlassMenuItem("song_album", "查看专辑", onClick = { navigate(catalogRoute(true, song.album)) }))
+        val artists = songArtistRoutes(song)
+        if (artists.isNotEmpty()) artists.forEachIndexed { index, (name, route) ->
+            add(GlassMenuItem("song_artist_$index", "歌手 · $name", onClick = { navigate(route) }))
+        } else if (song.artists.isNotBlank()) add(GlassMenuItem("song_artist", "查看歌手",
+            onClick = { navigate(catalogRoute(false, song.artists, song.musicSource)) }))
+        songAlbumRoute(song)?.let { route -> add(GlassMenuItem("song_album", "查看专辑", onClick = { navigate(route) })) }
         if (song.mv > 0) add(GlassMenuItem("song_mv_${song.id}", "播放 MV", onClick = { navigate("lib/mv/${song.mv}") }))
     }
 }
@@ -155,7 +200,7 @@ fun catalogRoute(album: Boolean, query: String = "") = "lib/browse/${if (album) 
     if (vm.route.startsWith("lib/mv/")) {
         io.github.currencortex.music.feature.mv.MvDetailScreen(state, vm.container, onBack, playMv,
             onArtist = { navigate("lib/artist/$it") }, onRefresh = { vm.reload(force = true) }, onDialogActive = onDialogActive)
-    } else if (vm.route.split('/').getOrNull(1) in setOf("playlist", "ncmplaylist", "album", "likes", "daily", "foryou", "recent")) {
+    } else if (vm.kind in setOf("playlist", "ncmplaylist", "album", "likes", "daily", "foryou", "recent", "new-songs")) {
         PlaylistDetailBody(state, vm, library, onBack, navigate, play,
             onRename = { name = state.title; rename = true }, onDelete = { delete = true })
     } else {
@@ -176,7 +221,7 @@ fun catalogRoute(album: Boolean, query: String = "") = "lib/browse/${if (album) 
                         onClick = { vm.container.playerController.setMode(io.github.currencortex.music.core.media.PlaybackMode.SHUFFLE); play(state.songs, state.songs.indices.random()) }) }
                 }
             }
-            if (roomRequest != null) item { Text("点击歌曲，为当前房间点歌", fontSize = 13.sp) }
+            if (roomRequest != null) item { Text("点击歌曲，加入当前一起听", fontSize = 13.sp) }
             if (editable) item { Row {
                 TextButton("重命名", onClick = { name = state.title; rename = true }, modifier = Modifier.testTag("rename_playlist"))
                 TextButton("删除歌单", onClick = { delete = true }, modifier = Modifier.testTag("delete_playlist"))
@@ -186,7 +231,7 @@ fun catalogRoute(album: Boolean, query: String = "") = "lib/browse/${if (album) 
             if (state.albums.isNotEmpty()) item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     items(state.albums, key = Album::id) { album ->
-                        Column(Modifier.width(160.dp).testTag("catalog_entry_${album.id}").clickable { navigate("lib/album/${album.id}") }) {
+                        Column(Modifier.width(160.dp).testTag("catalog_entry_${album.id}").clickable { navigate(albumRoute(album)) }) {
                             MusicCover(album.cover, Modifier.size(160.dp), 400)
                             Text(album.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
@@ -235,7 +280,10 @@ fun catalogRoute(album: Boolean, query: String = "") = "lib/browse/${if (album) 
         if (state.loading) item { LoadingSongList(3) }
         state.error?.let { error -> item { Text(error); MusicTextAction("重试", onClick = { vm.search() }) } }
         if (state.submitted.isNotBlank() && !state.loading && state.entries.isEmpty() && state.error == null) item { Text("没有找到结果") }
-        itemsIndexed(state.entries, key = { index, entry -> "${entry.id}-$index" }) { _, entry -> CatalogCard(entry) { navigate("lib/${if (state.albums) "album" else "artist"}/${entry.id}") } }
+        itemsIndexed(state.entries, key = { index, entry -> "${entry.source}-${entry.id}-$index" }) { _, entry -> CatalogCard(entry) { navigate(
+            if (entry.source == io.github.currencortex.music.data.song.MusicSource.QQ_MUSIC)
+                "lib/qq/${if (state.albums) "album" else "artist"}/${entry.remoteKey.ifBlank { entry.id.toString() }}"
+            else "lib/${if (state.albums) "album" else "artist"}/${entry.id}") } }
         if (state.more) item { MusicTextAction("加载更多", onClick = { vm.search(true) }, enabled = !state.loading) }
     }
     }
